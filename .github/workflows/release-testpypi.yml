@@ -1,0 +1,131 @@
+# Dry-run release to TestPyPI.
+#
+# Trigger: manual only — Actions tab → "Release (TestPyPI)" → "Run workflow".
+#          Pick any branch from the UI. Provide a pre-release suffix
+#          (e.g. ".dev1", "a1", "rc1"); the workflow combines it with the
+#          base version from pyproject.toml on that branch.
+#
+# The final version is: <pyproject base> + <your suffix>
+#   - pyproject.toml says: version = "0.1.2"   suffix: ".dev1"  → 0.1.2.dev1
+#   - pyproject.toml says: version = "0.1.2.dev5"  suffix: "rc1"   → 0.1.2rc1
+#     (any existing pre-release suffix on the base is stripped first)
+#
+# The patched version is written to pyproject.toml inside the runner
+# only. Nothing is committed back to your branch.
+#
+# One-time setup on TestPyPI
+# --------------------------
+#   1. test.pypi.org → Manage → Publishing → Add a pending publisher:
+#        Owner:    <your-gh-username-or-org>
+#        Repo:     <your-repo-name>
+#        Workflow: release-testpypi.yml
+#        Env:      testpypi
+#   2. GitHub repo → Settings → Environments → create `testpypi`.
+
+name: Release (TestPyPI)
+
+on:
+  workflow_dispatch:
+    inputs:
+      suffix:
+        description: 'Pre-release suffix to append (e.g. .dev1, a1, b2, rc1)'
+        required: true
+        type: string
+        default: '.dev1'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Compute and patch version
+        id: version
+        env:
+          SUFFIX: ${{ inputs.suffix }}
+        run: |
+          python3 - <<'PY'
+          import os, re, sys
+          from pathlib import Path
+
+          pp = Path("pyproject.toml")
+          text = pp.read_text()
+          m = re.search(r'^version = "([^"]+)"', text, re.M)
+          if not m:
+              sys.exit("::error::No version field in pyproject.toml")
+
+          base = re.sub(r'(a|b|rc|\.dev)\d+$', '', m.group(1))
+
+          suffix = os.environ["SUFFIX"].strip()
+          # Friendly normalization: "dev1" → ".dev1" (PEP 440 needs the dot)
+          if re.match(r'^dev\d+$', suffix):
+              suffix = '.' + suffix
+
+          final = base + suffix
+          if not re.fullmatch(r'\d+(\.\d+)*(a|b|rc|\.dev)\d+', final):
+              sys.exit(
+                  f"::error::Final version '{final}' is not a valid PEP 440 "
+                  "pre-release. Use suffixes like .dev1, a1, b1, rc1."
+              )
+
+          pp.write_text(
+              re.sub(r'^version = "[^"]+"', f'version = "{final}"', text, count=1, flags=re.M)
+          )
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"version={final}\n")
+          print(f"::notice::Publishing version {final} to TestPyPI")
+          PY
+
+      - name: Install build tools
+        run: python -m pip install --upgrade pip build twine
+
+      - name: Build frontend bundle
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Copy bundle into Python package
+        run: |
+          rm -rf backend/app/static
+          mkdir -p backend/app/static
+          cp -R frontend/dist/. backend/app/static/
+
+      - name: Build wheel + sdist
+        run: python -m build
+
+      - name: Check artifacts
+        run: twine check dist/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/

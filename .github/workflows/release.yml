@@ -1,43 +1,36 @@
-# Release workflow for forge-agent.
+# Release to PyPI.
 #
-# Triggers
-# --------
-#   * Push a tag like `v0.1.2`   → build → publish to PyPI → GitHub Release
-#   * Manual "Run workflow" dispatch with target=testpypi → build → TestPyPI
-#   * Manual dispatch with target=pypi → build → PyPI (no tag/release)
+# Trigger: GitHub Release published.
+#   Flow you'll follow manually:
+#     1. Bump `version` in pyproject.toml, commit, push.
+#     2. Create a GitHub Release (UI or `gh release create`) from the
+#        tag of your choice (e.g. v0.1.2). Set release notes.
+#     3. Click "Publish release".
+#     4. This workflow fires: builds the wheel, publishes to PyPI,
+#        uploads the wheel + sdist as assets on the release itself.
 #
-# The tag version must match `project.version` in pyproject.toml; the job
-# fails loudly otherwise so you can't ship mismatched metadata.
+# The release tag must match `project.version` in pyproject.toml; the
+# build fails loudly otherwise so mismatched metadata never ships.
+# Pre-release versions (0.1.2.dev1, 0.1.2rc1, ...) are rejected here —
+# use the Release (TestPyPI) workflow for those.
 #
-# One-time setup on PyPI + TestPyPI (Trusted Publishers, no API tokens)
-# --------------------------------------------------------------------
-#   1. pypi.org    → Manage → Publishing → Add a pending publisher:
-#        - Owner:     <your-gh-username-or-org>
-#        - Repo:      <your-repo-name>
-#        - Workflow:  release.yml
-#        - Env:       pypi
-#   2. test.pypi.org → same flow, environment name: testpypi
-#   3. GitHub repo → Settings → Environments → create `pypi` and `testpypi`.
-#      (Optional: add required reviewers on `pypi` for manual approval.)
+# One-time setup on PyPI
+# ----------------------
+#   1. pypi.org → Manage → Publishing → Add a pending publisher:
+#        Owner:    <your-gh-username-or-org>
+#        Repo:     <your-repo-name>
+#        Workflow: release.yml
+#        Env:      pypi
+#   2. GitHub repo → Settings → Environments → create `pypi`
+#      (optionally require a manual approval here for prod releases).
 #
-# After that, no secrets are needed — OIDC does the auth.
+# After setup, no secrets are needed — OIDC handles the auth.
 
-name: Release
+name: Release (PyPI)
 
 on:
-  push:
-    tags:
-      - 'v*.*.*'
-  workflow_dispatch:
-    inputs:
-      target:
-        description: 'Where to publish'
-        required: true
-        default: 'testpypi'
-        type: choice
-        options:
-          - testpypi
-          - pypi
+  release:
+    types: [published]
 
 jobs:
   build:
@@ -46,6 +39,8 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
 
       - uses: actions/setup-node@v4
         with:
@@ -84,13 +79,23 @@ jobs:
           v=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
-      - name: Verify tag matches pyproject version
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Verify release tag matches pyproject version
         run: |
-          tag="${GITHUB_REF#refs/tags/v}"
+          tag="${{ github.event.release.tag_name }}"
+          # Strip a leading "v" if present (v0.1.2 → 0.1.2)
+          tag="${tag#v}"
           pyv="${{ steps.version.outputs.version }}"
           if [ "$tag" != "$pyv" ]; then
-            echo "::error::Tag v$tag doesn't match pyproject.toml version $pyv"
+            echo "::error::Release tag ${{ github.event.release.tag_name }} doesn't match pyproject.toml version $pyv"
+            exit 1
+          fi
+
+      - name: Reject pre-release versions (use TestPyPI workflow instead)
+        run: |
+          v="${{ steps.version.outputs.version }}"
+          if echo "$v" | grep -Eq '(a|b|rc|\.dev)[0-9]+$'; then
+            echo "::error::Real PyPI releases must be clean versions (0.1.2). Got pre-release: $v"
+            echo "::error::Use the Release (TestPyPI) workflow for dry-runs; drop the suffix before publishing."
             exit 1
           fi
 
@@ -99,25 +104,8 @@ jobs:
           name: dist
           path: dist/
 
-  publish-testpypi:
+  publish:
     needs: build
-    if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
-    runs-on: ubuntu-latest
-    environment: testpypi
-    permissions:
-      id-token: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: dist/
-      - uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          repository-url: https://test.pypi.org/legacy/
-
-  publish-pypi:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -129,9 +117,8 @@ jobs:
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
 
-  github-release:
-    needs: publish-pypi
-    if: startsWith(github.ref, 'refs/tags/v')
+  attach-assets:
+    needs: publish
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -140,7 +127,7 @@ jobs:
         with:
           name: dist
           path: dist/
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: dist/*
-          generate_release_notes: true
+      - name: Upload wheel + sdist to the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" dist/* --clobber
