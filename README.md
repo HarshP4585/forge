@@ -127,9 +127,14 @@ forge
 
 ## Release to PyPI (GitHub Actions)
 
-Releases are automated via `.github/workflows/release.yml` using PyPI
+Two separate workflows, each using PyPI
 [Trusted Publishers](https://docs.pypi.org/trusted-publishers/) (OIDC).
 No API tokens stored anywhere.
+
+| Workflow | File | Trigger | Target |
+|---|---|---|---|
+| Release (PyPI) | `release.yml` | GitHub Release published | PyPI (wheel also attached to the Release) |
+| Release (TestPyPI) | `release-testpypi.yml` | manual dispatch | TestPyPI (dry-run) |
 
 **One-time setup:**
 
@@ -137,25 +142,49 @@ No API tokens stored anywhere.
    - Owner / Repository: your GitHub repo
    - Workflow file: `release.yml`
    - Environment: `pypi`
-2. Same on <https://test.pypi.org> with environment `testpypi`.
+2. Same on <https://test.pypi.org>:
+   - Workflow file: `release-testpypi.yml`
+   - Environment: `testpypi`
 3. GitHub repo → *Settings → Environments* → create `pypi` and `testpypi`
    (optionally require a manual approval on `pypi`).
 
-**Cut a release:**
+**Cut a real release:**
 
-```bash
-# Bump version in pyproject.toml, then:
-git commit -am "Release 0.1.2"
-git tag v0.1.2
-git push origin main v0.1.2
+1. Bump `version` in `pyproject.toml`, commit, push.
+2. On GitHub → *Releases → Draft a new release* (or `gh release create v0.1.2 --generate-notes`).
+3. Click *Publish release*.
+
+The workflow fires on the `release: published` event. It builds the
+wheel, publishes to PyPI, and uploads the wheel + sdist as assets on
+the release. A tag/pyproject version mismatch fails the build; a
+pre-release version (e.g. `0.1.2.dev1`) is also rejected here — those
+go through the TestPyPI workflow instead.
+
+**Dry-run to TestPyPI:**
+
+GitHub repo → *Actions → Release (TestPyPI) → Run workflow*:
+
+1. **Use workflow from:** pick any branch.
+2. **Pre-release suffix:** type `.dev1`, `a1`, `b2`, `rc1`, etc.
+
+The workflow combines the base version from `pyproject.toml` on that
+branch with your suffix at runtime — no commit needed, no pyproject
+edit, nothing polluting git history.
+
+```
+pyproject says:  0.1.2         +  suffix  .dev1   →  uploads 0.1.2.dev1
+pyproject says:  0.1.2.dev5    +  suffix  rc1     →  uploads 0.1.2rc1
+                 (any existing pre-release is stripped first)
 ```
 
-The workflow builds the wheel, publishes to PyPI, and creates a GitHub
-Release with the artifacts attached. A tag/pyproject version mismatch
-fails the build before anything ships.
+Every dispatch needs a new suffix since TestPyPI versions are
+immutable. When you're ready for a real release, make sure
+`pyproject.toml` is on a clean version (e.g. `0.1.2`), publish a
+GitHub Release with tag `v0.1.2` — the PyPI workflow takes it from
+there and rejects any pre-release version symmetrically.
 
-For a dry-run to TestPyPI, use *Actions → Release → Run workflow →
-target: testpypi*.
+`pipx install forge-agent` skips pre-releases by default, so end users
+on real PyPI never pull a `.dev` wheel.
 
 ## Project layout
 
