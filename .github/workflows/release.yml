@@ -1,0 +1,146 @@
+# Release workflow for forge-agent.
+#
+# Triggers
+# --------
+#   * Push a tag like `v0.1.2`   → build → publish to PyPI → GitHub Release
+#   * Manual "Run workflow" dispatch with target=testpypi → build → TestPyPI
+#   * Manual dispatch with target=pypi → build → PyPI (no tag/release)
+#
+# The tag version must match `project.version` in pyproject.toml; the job
+# fails loudly otherwise so you can't ship mismatched metadata.
+#
+# One-time setup on PyPI + TestPyPI (Trusted Publishers, no API tokens)
+# --------------------------------------------------------------------
+#   1. pypi.org    → Manage → Publishing → Add a pending publisher:
+#        - Owner:     <your-gh-username-or-org>
+#        - Repo:      <your-repo-name>
+#        - Workflow:  release.yml
+#        - Env:       pypi
+#   2. test.pypi.org → same flow, environment name: testpypi
+#   3. GitHub repo → Settings → Environments → create `pypi` and `testpypi`.
+#      (Optional: add required reviewers on `pypi` for manual approval.)
+#
+# After that, no secrets are needed — OIDC does the auth.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Where to publish'
+        required: true
+        default: 'testpypi'
+        type: choice
+        options:
+          - testpypi
+          - pypi
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build tools
+        run: python -m pip install --upgrade pip build twine
+
+      - name: Build frontend bundle
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Copy bundle into Python package
+        run: |
+          rm -rf backend/app/static
+          mkdir -p backend/app/static
+          cp -R frontend/dist/. backend/app/static/
+
+      - name: Build wheel + sdist
+        run: python -m build
+
+      - name: Check artifacts
+        run: twine check dist/*
+
+      - name: Read version from pyproject.toml
+        id: version
+        run: |
+          v=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Verify tag matches pyproject version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF#refs/tags/v}"
+          pyv="${{ steps.version.outputs.version }}"
+          if [ "$tag" != "$pyv" ]; then
+            echo "::error::Tag v$tag doesn't match pyproject.toml version $pyv"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish-testpypi:
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  publish-pypi:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    needs: publish-pypi
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

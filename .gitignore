@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+dist/
+frontend/vite.config.js
+frontend/vite.config.d.ts
+frontend/*.tsbuildinfo
+
+# App data (SQLite DB, pasted API keys — never commit)
+data/
+
+# Python build artifacts
+build/
+*.whl
+backend/app/static/
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
