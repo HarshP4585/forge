@@ -1,7 +1,7 @@
 import sqlite3
 import uuid
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from app.db import get_conn
 from app.schemas.sessions import Session, SessionCreate, SessionStatus
@@ -87,6 +87,40 @@ def delete(session_id: str) -> bool:
             conn.rollback()
             raise
     return cur.rowcount > 0
+
+
+def last_input_tokens_by_session() -> Dict[str, int]:
+    """For each session that has emitted at least one ``usage`` event,
+    return the ``input_tokens`` value of the most recent one. Used by
+    the HomePage to show a context-usage bar per session card without
+    spinning up a runtime for every session.
+
+    Implemented as a single SQLite query joining each session's row
+    against its max-seq usage event. SQLite's ``json_extract`` reads
+    the stored event JSON directly, so no per-row parsing in Python.
+    """
+    sql = """
+        SELECT m.session_id,
+               json_extract(m.event, '$.input_tokens') AS input_tokens
+        FROM messages m
+        INNER JOIN (
+            SELECT session_id, MAX(seq) AS max_seq
+            FROM messages
+            WHERE json_extract(event, '$.type') = 'usage'
+            GROUP BY session_id
+        ) latest
+        ON m.session_id = latest.session_id
+        AND m.seq = latest.max_seq
+    """
+    out: Dict[str, int] = {}
+    with get_conn() as conn:
+        rows = conn.execute(sql).fetchall()
+    for r in rows:
+        try:
+            out[r["session_id"]] = int(r["input_tokens"] or 0)
+        except (TypeError, ValueError):
+            continue
+    return out
 
 
 def update_status(session_id: str, status: SessionStatus) -> None:

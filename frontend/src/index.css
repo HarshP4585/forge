@@ -12,6 +12,14 @@ body,
   height: 100%;
 }
 
+/* Defense-in-depth: never let a popover or mis-measured element force
+ * horizontal scroll — if something overflows we'd rather clip than shift
+ * the whole app. Vertical scroll still works normally. */
+html,
+body {
+  overflow-x: hidden;
+}
+
 body {
   margin: 0;
   background: #1a1a1c;
@@ -111,4 +119,27 @@ a {
 }
 a:hover {
   text-decoration: underline;
+}
+
+/* Reusable animations */
+@keyframes forge-pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.85); }
+}
+@keyframes forge-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.forge-pulse-dot {
+  animation: forge-pulse-dot 1.4s ease-in-out infinite;
+}
+.forge-running-badge {
+  background: linear-gradient(
+    90deg,
+    rgba(92,156,246,0.15) 0%,
+    rgba(92,156,246,0.35) 50%,
+    rgba(92,156,246,0.15) 100%
+  );
+  background-size: 200% 100%;
+  animation: forge-shimmer 1.8s linear infinite;
 }

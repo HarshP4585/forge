@@ -36,13 +36,18 @@ function readAsBase64(file: File): Promise<{ base64: string; dataUrl: string }> 
 
 async function fileToAttachment(file: File): Promise<Attachment | string> {
   if (file.size > MAX_FILE_BYTES) {
-    return `${file.name} is too large (${(file.size / 1024 / 1024).toFixed(1)}MB, max 5MB)`
+    return `${file.name || 'file'} is too large (${(file.size / 1024 / 1024).toFixed(1)}MB, max 5MB)`
   }
+  // Pasted images from the clipboard sometimes arrive with empty ``name``.
+  // Mint a stable one so the attachment chip isn't blank.
+  const name =
+    file.name ||
+    `pasted-${Date.now()}.${(file.type.split('/')[1] || 'bin').split(';')[0]}`
   if (file.type.startsWith('image/')) {
     const { base64, dataUrl } = await readAsBase64(file)
     return {
       kind: 'image',
-      name: file.name,
+      name,
       mime: file.type,
       size: file.size,
       base64,
@@ -51,9 +56,9 @@ async function fileToAttachment(file: File): Promise<Attachment | string> {
   }
   if (isTextFile(file)) {
     const text = await file.text()
-    return { kind: 'text', name: file.name, size: file.size, text }
+    return { kind: 'text', name, size: file.size, text }
   }
-  return `${file.name} — unsupported file type (images + text files only)`
+  return `${name} — unsupported file type (images + text files only)`
 }
 
 /**
@@ -170,15 +175,21 @@ export default function PromptInput({
       <div
         style={{
           position: 'relative',
-          background: COLORS.bgCard,
+          // Soft gradient gives the composer a little depth over a flat
+          // card bg. Falls back to a clean solid on browsers that don't
+          // like layered backgrounds.
+          background: focused || dragging
+            ? `linear-gradient(180deg, ${COLORS.bgCard}, ${COLORS.bgElevated})`
+            : COLORS.bgCard,
           border: `1px solid ${dragging ? COLORS.blue : focused ? COLORS.blue : COLORS.border}`,
           borderRadius: 12,
           padding: '12px 14px',
           boxShadow:
             focused || dragging
-              ? `0 0 0 3px rgba(92,156,246,0.12), ${COLORS.shadowCard}`
+              ? `0 0 0 4px rgba(92,156,246,0.14), ${COLORS.shadowCard}`
               : COLORS.shadowCard,
-          transition: 'border-color 120ms ease, box-shadow 120ms ease',
+          transition:
+            'border-color 140ms ease, box-shadow 140ms ease, background 140ms ease',
         }}
         onClick={() => textareaRef.current?.focus()}
         onDragEnter={(e) => {
@@ -244,6 +255,25 @@ export default function PromptInput({
             // Delay dismissal so picker clicks can still land.
             setTimeout(() => setMention(null), 150)
           }}
+          onPaste={(e) => {
+            // Extract image files from the clipboard (screenshots, copied
+            // images, etc.) and turn them into attachments. Only
+            // preventDefault when images are actually present so a plain
+            // text paste still works as usual.
+            const items = e.clipboardData?.items
+            if (!items) return
+            const pastedFiles: File[] = []
+            for (const item of Array.from(items)) {
+              if (item.kind !== 'file') continue
+              if (!item.type.startsWith('image/')) continue
+              const f = item.getAsFile()
+              if (f) pastedFiles.push(f)
+            }
+            if (pastedFiles.length > 0) {
+              e.preventDefault()
+              void addFiles(pastedFiles)
+            }
+          }}
           onKeyDown={(e) => {
             // Route navigation keys to the picker when it's open.
             if (mention && mentionPickerRef.current?.onKeyDown(e)) {
@@ -258,7 +288,7 @@ export default function PromptInput({
           placeholder={
             running
               ? 'Agent is working…'
-              : 'Message the agent…  (⌘/Ctrl+Enter to send, @ to mention a file, drop files to attach)'
+              : 'Message the agent…  (⌘/Ctrl+Enter to send, @ to mention a file, drop or paste to attach)'
           }
           // Only block typing while the agent is running. WS disconnect
           // doesn't disable the textarea — user can compose during reconnect.

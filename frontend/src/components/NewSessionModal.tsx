@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   api,
+  formatTokens,
   type AgentKind,
   type CredentialStatus,
   type ModelsByAgent,
+  type ModelsDetails,
   type Session,
 } from '../api/rest'
+import Dropdown from './Dropdown'
 import FolderBrowser from './FolderBrowser'
 import { COLORS } from '../theme'
 
@@ -27,6 +30,7 @@ export default function NewSessionModal({
   const [mode, setMode] = useState<Mode>('form')
   const [creds, setCreds] = useState<CredentialStatus[] | null>(null)
   const [models, setModels] = useState<ModelsByAgent | null>(null)
+  const [modelDetails, setModelDetails] = useState<ModelsDetails | null>(null)
 
   const [agent, setAgent] = useState<AgentKind | null>(null)
   const [model, setModel] = useState('')
@@ -52,6 +56,24 @@ export default function NewSessionModal({
         setModel(m[initialAgent]?.[0] ?? '')
       })
       .catch((e) => setError((e as Error).message))
+  }, [])
+
+  // Separate effect for details — it can be slow (Gemini live-fetches)
+  // and we don't want to block credential/model list rendering on it.
+  // Failures are silent: the dropdown just doesn't show context hints.
+  useEffect(() => {
+    let cancelled = false
+    api.models
+      .details()
+      .then((d) => {
+        if (!cancelled) setModelDetails(d)
+      })
+      .catch(() => {
+        /* non-fatal */
+      })
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   const availableAgents = useMemo(() => {
@@ -163,37 +185,46 @@ export default function NewSessionModal({
         )}
 
         <label style={labelStyle}>Provider</label>
-        <select
-          value={agent ?? ''}
-          onChange={(e) => onAgentChange(e.target.value as AgentKind)}
-          disabled={!creds || noProvidersConfigured}
-          style={{ width: '100%' }}
-        >
-          {AGENT_OPTIONS.map((o) => {
-            const has = creds?.find((c) => c.agent_kind === o.kind)?.has_key
-            return (
-              <option key={o.kind} value={o.kind} disabled={!has}>
-                {o.label}
-                {has ? '' : ' — no API key'}
-              </option>
-            )
+        <Dropdown<AgentKind>
+          value={(agent ?? 'claude') as AgentKind}
+          onChange={onAgentChange}
+          options={AGENT_OPTIONS.map((o) => {
+            const has = !!creds?.find((c) => c.agent_kind === o.kind)?.has_key
+            return {
+              value: o.kind,
+              label: o.label,
+              disabled: !has,
+              hint: has ? undefined : '— no API key',
+            }
           })}
-        </select>
+          disabled={!creds || noProvidersConfigured}
+          aria-label="Provider"
+        />
 
         <label style={labelStyle}>Model</label>
-        <select
+        <Dropdown
           value={model}
-          onChange={(e) => setModel(e.target.value)}
+          onChange={setModel}
+          options={
+            agent
+              ? (models?.[agent] ?? []).map((id) => {
+                  const detail = modelDetails?.[agent]?.find(
+                    (d) => d.id === id,
+                  )
+                  return {
+                    value: id,
+                    label: id,
+                    hint: detail?.context_window
+                      ? `${formatTokens(detail.context_window)} ctx`
+                      : undefined,
+                  }
+                })
+              : []
+          }
           disabled={!agent || !models || noProvidersConfigured}
-          style={{ width: '100%' }}
-        >
-          {agent &&
-            models?.[agent]?.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-        </select>
+          placeholder={agent ? 'Pick a model' : 'Pick a provider first'}
+          aria-label="Model"
+        />
 
         <label style={labelStyle}>Folder path</label>
         <div style={{ display: 'flex', gap: 8 }}>

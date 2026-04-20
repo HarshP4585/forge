@@ -12,20 +12,32 @@ Not a SaaS. Runs as a native Python process on your machine.
 
 - **Three providers, multiple models** — Claude (opus / sonnet / haiku 4.x),
   OpenAI (gpt-5, gpt-4.1, gpt-5-mini), and Google Gemini (3.x preview +
-  2.5 stable tiers). Pick per session.
+  2.5 stable tiers). Pick per session; **switch the model mid-session**
+  from the header dropdown.
 - **17 local tools** — Bash, Read/Write/Edit, Glob/Grep, NotebookEdit,
   WebFetch/WebSearch, a TaskCreate/Get/Update/List todo system,
   Task/TaskStop/TaskOutput for Explore subagents, AskUserQuestion.
 - **Transparent tool calls** — every tool call is rendered inline with its
   input and output; nothing is hidden.
-- **Attachments** — drag images or text files into the prompt box; Claude and
-  OpenAI both see them.
+- **Markdown-rendered assistant replies** — fenced code with syntax
+  highlighting, tables, lists via `react-markdown` + `rehype-highlight`.
+- **Attachments** — drag *or paste* images directly into the prompt box;
+  text files are inlined as fenced blocks. Claude / OpenAI / Gemini all
+  see them.
+- **Context meter + one-click compaction** — the header shows live
+  input-token usage against the model's context window. Hit ~80 % and the
+  Compact button highlights; click it to summarize the conversation so far
+  and keep going without truncation.
+- **Homepage landing view** — recent sessions with per-card context-usage
+  bars, search, and folder / model filters.
 - **Multiple parallel sessions** — each session has its own conversation
   history + folder; switch between them in the sidebar.
 - **Streaming** — assistant text and thinking blocks stream token-by-token.
 - **Interrupt** a running turn with a Stop button; history persists.
-- **SQLite storage** — single `app.db` file under `~/.forge/`; conversation
-  events persist across restarts.
+- **SQLite storage with restart-safe conversations** — single `app.db`
+  file under `~/.forge/`; on restart the in-memory history is rehydrated
+  from the event log, so you can keep talking to any session after
+  `forge stop` / `forge`.
 - **Dark UI** — sidebar-driven, inspired by Claude Code Desktop.
 
 ## Install
@@ -61,8 +73,8 @@ forge --data-dir ~/.forge
 
 ## First-time use
 
-1. Open **Settings** in the sidebar, paste an Anthropic or OpenAI API key (or
-   both). Keys are stored in `~/.forge/app.db`.
+1. Open **Settings** in the sidebar, paste an Anthropic, OpenAI, or Google
+   Gemini API key (or all three). Keys are stored in `~/.forge/app.db`.
 2. Click **+ New session**, pick a provider + model, choose a folder, create.
 3. Type a prompt. Tool calls render inline as collapsible cards.
 
@@ -71,6 +83,7 @@ forge --data-dir ~/.forge
 - Backend: Python 3.10+, FastAPI, WebSockets, SQLite via `sqlite3` stdlib
 - LLM SDKs: `anthropic` + `openai` + `google-genai` Python clients (direct, no CLIs)
 - Frontend: React 18, Vite, TypeScript, inline styles + a small theme module
+- Markdown rendering: `react-markdown` + `remark-gfm` + `rehype-highlight` + `highlight.js`
 - Extra deps: `httpx` (WebFetch + WebSearch), `markdownify` (HTML → md)
 
 ## Develop
@@ -240,7 +253,6 @@ See `CONTEXT.md` for the architectural decisions and history.
 - o-series reasoning models (`o1`, `o3`) — need a different request shape
 - Local / self-hosted LLMs (user-supplied `base_url`)
 - `EnterPlanMode` / `ExitPlanMode` / `Skill` tools
-- Cross-restart conversation turn rehydration
 - Per-tool approval modal (all tools currently auto-allow)
 
 ## License

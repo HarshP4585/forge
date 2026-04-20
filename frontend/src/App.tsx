@@ -3,6 +3,7 @@ import { api, type Session } from './api/rest'
 import Sidebar from './components/Sidebar'
 import SessionView from './components/SessionView'
 import CredentialsPage from './components/CredentialsPage'
+import HomePage from './components/HomePage'
 import NewSessionModal from './components/NewSessionModal'
 import ConfirmModal from './components/ConfirmModal'
 import { COLORS } from './theme'
@@ -20,10 +21,13 @@ export default function App() {
     try {
       const list = await api.sessions.list()
       setSessions(list)
-      setActiveId((prev) => {
-        if (prev && list.some((s) => s.id === prev)) return prev
-        return list[0]?.id ?? null
-      })
+      // Drop a stale active id if the session no longer exists (e.g.
+      // it was deleted in another tab). Otherwise leave selection
+      // alone — the user lands on Home by default and explicitly opts
+      // into a session from there or from the sidebar.
+      setActiveId((prev) =>
+        prev && list.some((s) => s.id === prev) ? prev : null,
+      )
     } catch (e) {
       setError((e as Error).message)
     }
@@ -86,6 +90,10 @@ export default function App() {
         onNewSession={() => setModalOpen(true)}
         onDeleteSession={requestDelete}
         onOpenSettings={() => setPage('settings')}
+        onGoHome={() => {
+          setActiveId(null)
+          setPage('sessions')
+        }}
       />
 
       <main
@@ -117,7 +125,12 @@ export default function App() {
             onSessionChanged={refresh}
           />
         ) : (
-          <EmptyState onNew={() => setModalOpen(true)} />
+          <HomePage
+            sessions={sessions ?? []}
+            onSelectSession={(id) => setActiveId(id)}
+            onNewSession={() => setModalOpen(true)}
+            onOpenSettings={() => setPage('settings')}
+          />
         )}
       </main>
 
@@ -143,69 +156,3 @@ export default function App() {
   )
 }
 
-function EmptyState({ onNew }: { onNew: () => void }) {
-  return (
-    <div
-      style={{
-        flex: 1,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        flexDirection: 'column',
-        gap: 20,
-        color: COLORS.textMuted,
-        textAlign: 'center',
-        padding: 40,
-      }}
-    >
-      <div
-        style={{
-          width: 72,
-          height: 72,
-          borderRadius: 18,
-          background: `linear-gradient(135deg, ${COLORS.blue}, ${COLORS.purple})`,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          fontSize: 32,
-          color: '#fff',
-          boxShadow: '0 20px 40px rgba(92,156,246,0.2)',
-        }}
-      >
-        ✨
-      </div>
-      <div>
-        <h2
-          style={{
-            fontSize: 22,
-            margin: '0 0 6px',
-            color: COLORS.text,
-            fontWeight: 600,
-            letterSpacing: -0.015,
-          }}
-        >
-          Start a session
-        </h2>
-        <p style={{ margin: 0, fontSize: 14, lineHeight: 1.5, maxWidth: 420 }}>
-          Point the agent at a folder, pick a model, and go. Every tool call is
-          shown inline and nothing leaves your machine.
-        </p>
-      </div>
-      <button
-        onClick={onNew}
-        style={{
-          padding: '10px 22px',
-          background: COLORS.blue,
-          color: '#fff',
-          border: 'none',
-          borderRadius: 8,
-          fontWeight: 500,
-          fontSize: 14,
-          boxShadow: '0 4px 14px rgba(92,156,246,0.3)',
-        }}
-      >
-        + New session
-      </button>
-    </div>
-  )
-}

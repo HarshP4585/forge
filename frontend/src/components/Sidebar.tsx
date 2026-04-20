@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { Session, SessionStatus } from '../api/rest'
-import { COLORS } from '../theme'
+import { COLORS, providerAccent } from '../theme'
 
 const STATUS_COLORS: Record<SessionStatus, string> = {
   idle: COLORS.textDim,
@@ -13,6 +13,11 @@ const STATUS_COLORS: Record<SessionStatus, string> = {
 function folderBasename(path: string): string {
   const parts = path.replace(/\/+$/, '').split('/')
   return parts[parts.length - 1] || path
+}
+
+function shortModel(model: string): string {
+  if (!model) return ''
+  return model.replace(/^claude-/, '').replace(/^gemini-/, '')
 }
 
 function groupByFolder(sessions: Session[]) {
@@ -37,6 +42,7 @@ export default function Sidebar({
   onNewSession,
   onDeleteSession,
   onOpenSettings,
+  onGoHome,
 }: {
   sessions: Session[]
   activeId: string | null
@@ -45,6 +51,9 @@ export default function Sidebar({
   onNewSession: () => void
   onDeleteSession: (id: string) => void
   onOpenSettings: () => void
+  /** Clear the active session and route to the Home view. Wired to
+   *  the logo at the top so "Forge." acts as a "back to home" link. */
+  onGoHome: () => void
 }) {
   const [query, setQuery] = useState('')
 
@@ -71,26 +80,49 @@ export default function Sidebar({
         fontSize: 13,
       }}
     >
-      <div
+      {/* Wordmark doubles as a "go home" link. Click "Forge." → drop
+       * the active session and land on the HomePage. */}
+      <button
+        type="button"
+        onClick={onGoHome}
+        title="Home"
         style={{
-          padding: '16px 16px 10px',
+          padding: '18px 18px 14px',
           display: 'flex',
-          alignItems: 'center',
-          gap: 10,
+          alignItems: 'baseline',
+          gap: 1,
+          background: 'transparent',
+          border: 'none',
+          cursor: 'pointer',
+          textAlign: 'left',
+          fontFamily: 'inherit',
+          width: '100%',
         }}
       >
-        <div
+        <span
           style={{
-            width: 22,
-            height: 22,
-            borderRadius: 6,
-            background: `linear-gradient(135deg, ${COLORS.blue}, ${COLORS.purple})`,
+            fontSize: 19,
+            fontWeight: 800,
+            letterSpacing: -0.035,
+            color: '#ffffff',
+            lineHeight: 1,
           }}
-        />
-        <span style={{ fontSize: 14, fontWeight: 600, letterSpacing: -0.01 }}>
+        >
           Forge
         </span>
-      </div>
+        <span
+          aria-hidden
+          style={{
+            fontSize: 19,
+            fontWeight: 800,
+            color: COLORS.purple,
+            lineHeight: 1,
+            marginLeft: 1,
+          }}
+        >
+          .
+        </span>
+      </button>
 
       <div style={{ padding: '4px 10px 8px' }}>
         <button
@@ -169,7 +201,8 @@ export default function Sidebar({
                 fontWeight: 600,
               }}
             >
-              {folder}
+              <span>{folder}</span>
+              <span style={{ marginLeft: 6, opacity: 0.6 }}>· {list.length}</span>
             </div>
             {list.map((s) => {
               const active = page === 'sessions' && s.id === activeId
@@ -228,58 +261,107 @@ function SessionRow({
   onDelete: () => void
 }) {
   const [hover, setHover] = useState(false)
+  const accent = providerAccent(session.agent_kind)
   return (
     <div
       onClick={onSelect}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{
+        position: 'relative',
         display: 'flex',
         alignItems: 'center',
         gap: 9,
-        padding: '7px 14px 7px 16px',
+        padding: '8px 14px 8px 16px',
         marginLeft: 4,
         marginRight: 4,
         borderRadius: 6,
         background: active
-          ? COLORS.bgCard
+          ? COLORS.bgElevated
           : hover
             ? COLORS.bgCardHover
             : 'transparent',
         cursor: 'pointer',
         fontSize: 13,
         color: active ? COLORS.text : COLORS.textMuted,
-        borderLeft: active
-          ? `2px solid ${COLORS.blue}`
-          : '2px solid transparent',
-        paddingLeft: 14,
+        transition: 'background 120ms ease',
       }}
     >
-      <span
-        style={{
-          width: 7,
-          height: 7,
-          borderRadius: '50%',
-          background: STATUS_COLORS[session.status],
-          flexShrink: 0,
-          boxShadow:
-            session.status === 'running'
-              ? `0 0 8px ${COLORS.blue}`
-              : undefined,
-        }}
-        title={session.status}
-      />
-      <span
+      {/* Provider-accented left rail when active. Absolutely positioned
+       * so toggling it doesn't reflow the row's contents (avoiding a
+       * 2px horizontal jitter on select). */}
+      {active && (
+        <span
+          aria-hidden
+          style={{
+            position: 'absolute',
+            left: 0,
+            top: 6,
+            bottom: 6,
+            width: 3,
+            background: accent,
+            borderRadius: 2,
+          }}
+        />
+      )}
+      {(() => {
+        const isAbnormal =
+          session.status === 'error' || session.status === 'awaiting_approval'
+        const dotColor = isAbnormal ? STATUS_COLORS[session.status] : accent
+        return (
+          <span
+            style={{
+              width: 7,
+              height: 7,
+              borderRadius: '50%',
+              background: dotColor,
+              flexShrink: 0,
+              boxShadow:
+                session.status === 'running'
+                  ? `0 0 6px ${accent}`
+                  : undefined,
+              opacity: session.status === 'stopped' ? 0.45 : 1,
+            }}
+            title={`${session.agent_kind} · ${session.status}`}
+          />
+        )
+      })()}
+      <div
         style={{
           flex: 1,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-          fontWeight: active ? 500 : 400,
+          minWidth: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 1,
         }}
       >
-        {session.title}
-      </span>
+        <span
+          style={{
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            fontWeight: active ? 500 : 400,
+            fontSize: 13,
+          }}
+        >
+          {session.title}
+        </span>
+        {session.model && (
+          <span
+            style={{
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              fontSize: 10.5,
+              color: accent,
+              opacity: 0.75,
+              lineHeight: 1.2,
+            }}
+          >
+            {shortModel(session.model)}
+          </span>
+        )}
+      </div>
       <button
         onClick={(e) => {
           e.stopPropagation()

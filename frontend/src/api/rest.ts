@@ -34,6 +34,16 @@ export interface SessionCreate {
 
 export type ModelsByAgent = Record<AgentKind, string[]>
 
+export interface ModelDetail {
+  id: string
+  context_window: number | null
+  max_output_tokens: number | null
+  /** 'static' = hardcoded in backend; 'api' = fetched live from vendor. */
+  source: 'static' | 'api' | null
+}
+
+export type ModelsDetails = Record<AgentKind, ModelDetail[]>
+
 export interface FolderValidateResponse {
   exists: boolean
   is_dir: boolean
@@ -102,6 +112,12 @@ export const api = {
       fetch(`/api/sessions/${id}/messages`).then((r) =>
         handle<Array<Record<string, unknown> & { seq: number }>>(r),
       ),
+    /** Most recent ``input_tokens`` per session (sessions without a
+     *  usage event yet are omitted). */
+    usage: () =>
+      fetch('/api/sessions/usage').then((r) =>
+        handle<Record<string, number>>(r),
+      ),
   },
   folders: {
     validate: (path: string) =>
@@ -122,5 +138,23 @@ export const api = {
   },
   models: {
     list: () => fetch('/api/models').then((r) => handle<ModelsByAgent>(r)),
+    details: () =>
+      fetch('/api/models/details').then((r) => handle<ModelsDetails>(r)),
   },
+}
+
+// ─── Formatting helpers ─────────────────────────────────────────────
+/** Format a token count as a compact short label: 128000 → "128k",
+ *  1000000 → "1M", 1048576 → "1M" (rounded). */
+export function formatTokens(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(n) || n <= 0) return '—'
+  if (n >= 1_000_000) {
+    const v = n / 1_000_000
+    return v % 1 === 0 ? `${v}M` : `${v.toFixed(1).replace(/\.0$/, '')}M`
+  }
+  if (n >= 1_000) {
+    const v = Math.round(n / 1_000)
+    return `${v}k`
+  }
+  return String(n)
 }

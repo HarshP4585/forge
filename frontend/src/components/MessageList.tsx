@@ -1,8 +1,14 @@
 import { useEffect, useMemo, useRef } from 'react'
+import { formatTokens, type AgentKind } from '../api/rest'
 import type { ServerEvent } from '../api/ws'
 import Markdown from './Markdown'
 import ToolCallCard from './ToolCallCard'
-import { COLORS } from '../theme'
+import { COLORS, FONTS, providerAccent } from '../theme'
+
+interface ContextLimits {
+  context_window: number | null
+  max_output_tokens: number | null
+}
 
 interface AttachmentMeta {
   kind: 'image' | 'text'
@@ -119,9 +125,18 @@ function reduce(events: ServerEvent[]): RenderItem[] {
   return items
 }
 
-export default function MessageList({ events }: { events: ServerEvent[] }) {
+export default function MessageList({
+  events,
+  agentKind,
+  contextLimits,
+}: {
+  events: ServerEvent[]
+  agentKind: AgentKind
+  contextLimits?: ContextLimits | null
+}) {
   const items = useMemo(() => reduce(events), [events])
   const bottomRef = useRef<HTMLDivElement>(null)
+  const accent = providerAccent(agentKind)
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
@@ -175,14 +190,18 @@ export default function MessageList({ events }: { events: ServerEvent[] }) {
   return (
     <div style={{ maxWidth: 900, margin: '0 auto', padding: '0 0 20px' }}>
       {items.map((it, i) => (
-        <div key={i}>{renderItem(it)}</div>
+        <div key={i}>{renderItem(it, accent, contextLimits ?? null)}</div>
       ))}
       <div ref={bottomRef} />
     </div>
   )
 }
 
-function renderItem(it: RenderItem) {
+function renderItem(
+  it: RenderItem,
+  accent: string,
+  limits: ContextLimits | null,
+) {
   switch (it.kind) {
     case 'user':
       return (
@@ -238,7 +257,15 @@ function renderItem(it: RenderItem) {
       )
     case 'assistant':
       return (
-        <Markdown style={{ margin: '12px 0' }}>{it.text}</Markdown>
+        <div
+          style={{
+            margin: '20px 0',
+            padding: '2px 0 2px 14px',
+            borderLeft: `2px solid ${accent}`,
+          }}
+        >
+          <Markdown>{it.text}</Markdown>
+        </div>
       )
     case 'thinking':
       return (
@@ -297,18 +324,84 @@ function renderItem(it: RenderItem) {
           · {it.text}
         </div>
       )
-    case 'usage':
+    case 'usage': {
+      const ctx = limits?.context_window ?? null
+      const maxOut = limits?.max_output_tokens ?? null
+      // Fill percentage drives a gentle color shift — stays muted for
+      // most turns, warms into amber/red when approaching the cap.
+      const pct =
+        ctx && ctx > 0
+          ? Math.min(100, Math.round((it.input_tokens / ctx) * 100))
+          : null
+      const pctColor =
+        pct == null
+          ? COLORS.textDim
+          : pct >= 90
+            ? COLORS.red
+            : pct >= 70
+              ? COLORS.amber
+              : COLORS.textDim
       return (
         <div
           style={{
             fontSize: 11,
             color: COLORS.textDim,
-            padding: '2px 0',
+            padding: '2px 0 10px 14px',
+            fontFamily: FONTS.mono,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 8,
+            opacity: 0.85,
           }}
+          title={
+            ctx
+              ? `Input: ${it.input_tokens.toLocaleString()} / ${ctx.toLocaleString()} context · Output: ${it.output_tokens.toLocaleString()}${
+                  maxOut ? ` / ${maxOut.toLocaleString()}` : ''
+                }`
+              : 'Tokens consumed on this turn'
+          }
         >
-          in {it.input_tokens} · out {it.output_tokens} tokens
+          <svg
+            width="11"
+            height="11"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden
+          >
+            <circle cx="12" cy="12" r="10" />
+            <polyline points="12 6 12 12 15 14" />
+          </svg>
+          <span>
+            in {it.input_tokens.toLocaleString()}
+            {ctx ? (
+              <>
+                <span style={{ opacity: 0.5 }}> / </span>
+                {formatTokens(ctx)}
+              </>
+            ) : null}
+          </span>
+          {pct != null && (
+            <span style={{ color: pctColor, fontWeight: 600 }}>
+              ({pct}%)
+            </span>
+          )}
+          <span style={{ opacity: 0.5 }}>·</span>
+          <span>
+            out {it.output_tokens.toLocaleString()}
+            {maxOut ? (
+              <>
+                <span style={{ opacity: 0.5 }}> / </span>
+                {formatTokens(maxOut)}
+              </>
+            ) : null}
+          </span>
         </div>
       )
+    }
     case 'error':
       return (
         <div

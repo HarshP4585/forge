@@ -18,6 +18,13 @@ async def list_sessions() -> List[Session]:
     return store.list_all()
 
 
+@router.get("/usage")
+async def sessions_usage() -> Dict[str, int]:
+    """Map of ``session_id`` → most recent ``input_tokens`` value.
+    Sessions that haven't emitted a usage event yet are omitted."""
+    return store.last_input_tokens_by_session()
+
+
 @router.post("", response_model=Session, status_code=status.HTTP_201_CREATED)
 async def create_session(payload: SessionCreate) -> Session:
     if cred_store.get_key(payload.agent_kind) is None:
