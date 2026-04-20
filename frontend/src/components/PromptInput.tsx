@@ -373,7 +373,12 @@ export default function PromptInput({
           </span>
           {running ? (
             <button
-              onClick={onStop}
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                console.info('[forge] Stop clicked')
+                onStop()
+              }}
               style={{
                 background: COLORS.red,
                 color: '#fff',
@@ -381,6 +386,7 @@ export default function PromptInput({
                 borderRadius: 8,
                 padding: '6px 14px',
                 fontWeight: 500,
+                cursor: 'pointer',
               }}
             >
               Stop

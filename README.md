@@ -10,8 +10,9 @@ Not a SaaS. Runs as a native Python process on your machine.
 
 ## Features
 
-- **Two providers, multiple models** — Claude (opus / sonnet / haiku 4.x) and
-  OpenAI (gpt-5, gpt-4.1, gpt-5-mini). Pick per session.
+- **Three providers, multiple models** — Claude (opus / sonnet / haiku 4.x),
+  OpenAI (gpt-5, gpt-4.1, gpt-5-mini), and Google Gemini (3.x preview +
+  2.5 stable tiers). Pick per session.
 - **17 local tools** — Bash, Read/Write/Edit, Glob/Grep, NotebookEdit,
   WebFetch/WebSearch, a TaskCreate/Get/Update/List todo system,
   Task/TaskStop/TaskOutput for Explore subagents, AskUserQuestion.
@@ -68,7 +69,7 @@ forge --data-dir ~/.forge
 ## Tech stack
 
 - Backend: Python 3.10+, FastAPI, WebSockets, SQLite via `sqlite3` stdlib
-- LLM SDKs: `anthropic` + `openai` Python clients (direct, no CLIs)
+- LLM SDKs: `anthropic` + `openai` + `google-genai` Python clients (direct, no CLIs)
 - Frontend: React 18, Vite, TypeScript, inline styles + a small theme module
 - Extra deps: `httpx` (WebFetch + WebSearch), `markdownify` (HTML → md)
 
@@ -185,6 +186,20 @@ there and rejects any pre-release version symmetrically.
 
 `pipx install forge-agent` skips pre-releases by default, so end users
 on real PyPI never pull a `.dev` wheel.
+
+**Install a TestPyPI pre-release locally to smoke-test:**
+
+```bash
+pipx install \
+  --index-url https://pypi.org/simple/ \
+  --pip-args="--extra-index-url https://test.pypi.org/simple/ --pre --only-binary=:all:" \
+  forge-agent
+```
+
+The `--only-binary=:all:` flag is important: TestPyPI has an ancient
+broken `fastapi` sdist squatter that pip will otherwise try to build
+from source and fail on. Forcing binary-only makes pip skip it and
+pull the real `fastapi` wheel from PyPI.
 
 ## Project layout
 

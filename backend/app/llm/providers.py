@@ -1,4 +1,4 @@
-"""Anthropic + OpenAI streaming adapters with a shared interface.
+"""Anthropic + OpenAI + Gemini streaming adapters with a shared interface.
 
 Each provider exposes ``stream_turn`` which takes our internal
 Anthropic-shaped history, the system prompt string, tool schemas in the
@@ -270,9 +270,179 @@ class OpenAIProvider:
         return {"text": text, "tool_uses": tool_uses}
 
 
+def _translate_to_gemini(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Internal (Anthropic-shaped) history -> Gemini ``contents`` format.
+
+    Gemini uses role ``"model"`` for assistant and ``"user"`` for both
+    human turns and tool responses. Tool results are emitted in their own
+    user message so they don't get mixed with text prompts, matching how
+    the agent loop already appends them (one user message per round of
+    results).
+    """
+    out: List[Dict[str, Any]] = []
+    call_name_by_id: Dict[str, str] = {}
+
+    for m in messages:
+        role = m["role"]
+        content = m["content"]
+
+        if role == "user":
+            if isinstance(content, str):
+                out.append({"role": "user", "parts": [{"text": content}]})
+                continue
+            user_parts: List[Dict[str, Any]] = []
+            response_parts: List[Dict[str, Any]] = []
+            for block in content:
+                t = block.get("type")
+                if t == "text":
+                    user_parts.append({"text": block["text"]})
+                elif t == "image":
+                    source = block.get("source") or {}
+                    if source.get("type") == "base64":
+                        user_parts.append({
+                            "inline_data": {
+                                "mime_type": source.get("media_type", "image/png"),
+                                "data": source.get("data", ""),
+                            },
+                        })
+                elif t == "tool_result":
+                    tid = block.get("tool_use_id") or ""
+                    name = call_name_by_id.get(tid, tid)
+                    response_parts.append({
+                        "function_response": {
+                            "name": name,
+                            "response": {"output": str(block.get("content", ""))},
+                        },
+                    })
+            if user_parts:
+                out.append({"role": "user", "parts": user_parts})
+            if response_parts:
+                out.append({"role": "user", "parts": response_parts})
+        elif role == "assistant":
+            if isinstance(content, str):
+                out.append({"role": "model", "parts": [{"text": content}]})
+                continue
+            model_parts: List[Dict[str, Any]] = []
+            for block in content:
+                t = block.get("type")
+                if t == "text":
+                    model_parts.append({"text": block["text"]})
+                elif t == "tool_use":
+                    call_name_by_id[block["id"]] = block["name"]
+                    model_parts.append({
+                        "function_call": {
+                            "name": block["name"],
+                            "args": block.get("input") or {},
+                        },
+                    })
+                # thinking blocks are skipped — Gemini has no equivalent
+            if model_parts:
+                out.append({"role": "model", "parts": model_parts})
+    return out
+
+
+class GeminiProvider:
+    kind = "gemini"
+
+    def __init__(self, api_key: str) -> None:
+        from google import genai
+        self._client = genai.Client(api_key=api_key)
+
+    async def close(self) -> None:
+        # google-genai Client holds no persistent session — nothing to close.
+        pass
+
+    async def stream_turn(
+        self,
+        *,
+        system: str,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]],
+        model: str,
+        emit: EmitFn,
+    ) -> Dict[str, Any]:
+        from google.genai import types
+
+        msg_id = f"msg-{uuid.uuid4()}"
+        contents = _translate_to_gemini(messages)
+
+        gemini_tools = None
+        if tools:
+            gemini_tools = [types.Tool(function_declarations=tools)]
+
+        config = types.GenerateContentConfig(
+            system_instruction=system,
+            tools=gemini_tools,
+        )
+
+        text = ""
+        tool_uses: List[Dict[str, Any]] = []
+        final_usage: Any = None
+
+        stream = await self._client.aio.models.generate_content_stream(
+            model=model,
+            contents=contents,
+            config=config,
+        )
+
+        async for chunk in stream:
+            candidates = getattr(chunk, "candidates", None) or []
+            if candidates:
+                cand_content = getattr(candidates[0], "content", None)
+                parts = getattr(cand_content, "parts", None) or [] if cand_content else []
+                for part in parts:
+                    part_text = getattr(part, "text", None)
+                    if part_text:
+                        text += part_text
+                        await emit({
+                            "type": "assistant.delta",
+                            "text": part_text,
+                            "message_id": msg_id,
+                        })
+                    fc = getattr(part, "function_call", None)
+                    if fc is not None:
+                        name = getattr(fc, "name", None) or ""
+                        raw_args = getattr(fc, "args", None) or {}
+                        try:
+                            args = dict(raw_args)
+                        except Exception:
+                            args = {}
+                        tool_uses.append({
+                            "id": f"gemini_tool_{uuid.uuid4().hex[:12]}",
+                            "name": name,
+                            "input": args,
+                        })
+
+            um = getattr(chunk, "usage_metadata", None)
+            if um is not None:
+                final_usage = um
+
+        if text:
+            await emit({
+                "type": "assistant.complete",
+                "text": text,
+                "message_id": msg_id,
+            })
+
+        if final_usage is not None:
+            i = int(getattr(final_usage, "prompt_token_count", 0) or 0)
+            o = int(getattr(final_usage, "candidates_token_count", 0) or 0)
+            if i or o:
+                await emit({
+                    "type": "usage",
+                    "message_id": msg_id,
+                    "input_tokens": i,
+                    "output_tokens": o,
+                })
+
+        return {"text": text, "tool_uses": tool_uses}
+
+
 def build_provider(agent_kind: str, api_key: str):
     if agent_kind == "claude":
         return AnthropicProvider(api_key)
     if agent_kind == "openai":
         return OpenAIProvider(api_key)
+    if agent_kind == "gemini":
+        return GeminiProvider(api_key)
     raise ValueError(f"Unknown agent_kind: {agent_kind}")

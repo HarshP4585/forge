@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react'
 import type { ServerEvent } from '../api/ws'
+import Markdown from './Markdown'
 import ToolCallCard from './ToolCallCard'
 import { COLORS } from '../theme'
 
@@ -237,17 +238,7 @@ function renderItem(it: RenderItem) {
       )
     case 'assistant':
       return (
-        <div
-          style={{
-            margin: '12px 0',
-            fontSize: 14,
-            lineHeight: 1.6,
-            whiteSpace: 'pre-wrap',
-            color: COLORS.text,
-          }}
-        >
-          {it.text}
-        </div>
+        <Markdown style={{ margin: '12px 0' }}>{it.text}</Markdown>
       )
     case 'thinking':
       return (
@@ -260,7 +251,6 @@ function renderItem(it: RenderItem) {
             color: COLORS.textMuted,
             fontSize: 13,
             fontStyle: 'italic',
-            whiteSpace: 'pre-wrap',
           }}
         >
           <div
@@ -276,7 +266,9 @@ function renderItem(it: RenderItem) {
           >
             Thinking
           </div>
-          {it.text}
+          <Markdown style={{ fontSize: 13, color: COLORS.textMuted }}>
+            {it.text}
+          </Markdown>
         </div>
       )
     case 'tool':

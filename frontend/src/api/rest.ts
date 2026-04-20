@@ -1,4 +1,4 @@
-export type AgentKind = 'claude' | 'openai'
+export type AgentKind = 'claude' | 'openai' | 'gemini'
 
 export type SessionStatus =
   | 'idle'
@@ -87,6 +87,12 @@ export const api = {
     create: (body: SessionCreate) =>
       fetch('/api/sessions', {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }).then((r) => handle<Session>(r)),
+    update: (id: string, body: { model?: string }) =>
+      fetch(`/api/sessions/${id}`, {
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       }).then((r) => handle<Session>(r)),

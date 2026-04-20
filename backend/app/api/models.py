@@ -25,6 +25,17 @@ MODELS: Dict[str, List[str]] = {
         "gpt-4.1",
         "gpt-5-mini",
     ],
+    # Google Gemini text models. 2.5 family is stable; 3.x is preview-only.
+    # Image-gen, TTS, native-audio, and live variants excluded — they need
+    # a different request shape.
+    "gemini": [
+        "gemini-3.1-pro-preview",
+        "gemini-3-flash-preview",
+        "gemini-3.1-flash-lite-preview",
+        "gemini-2.5-pro",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+    ],
 }
 
 

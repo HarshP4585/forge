@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, type Session } from '../api/rest'
+import { api, type ModelsByAgent, type Session } from '../api/rest'
 import {
   openSessionSocket,
   type ServerEvent,
@@ -54,6 +54,9 @@ export default function SessionView({
   const [pendingQuestion, setPendingQuestion] = useState<
     { id: string; questions: AskQuestion[] } | null
   >(null)
+  const [models, setModels] = useState<ModelsByAgent | null>(null)
+  const [currentModel, setCurrentModel] = useState<string>(session.model)
+  const [modelSwitching, setModelSwitching] = useState(false)
   const socketRef = useRef<SessionSocket | null>(null)
   const lastSeqRef = useRef(0)
   const onSessionChangedRef = useRef(onSessionChanged)
@@ -121,7 +124,40 @@ export default function SessionView({
   useEffect(() => {
     setStatus(session.status)
     setTitle(session.title)
-  }, [session.status, session.title])
+    setCurrentModel(session.model)
+  }, [session.status, session.title, session.model])
+
+  useEffect(() => {
+    let cancelled = false
+    api.models
+      .list()
+      .then((m) => {
+        if (!cancelled) setModels(m)
+      })
+      .catch(() => {
+        /* non-fatal — dropdown just falls back to the current model */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const onModelChange = async (nextModel: string) => {
+    if (nextModel === currentModel) return
+    const prev = currentModel
+    setCurrentModel(nextModel)
+    setModelSwitching(true)
+    setLoadError(null)
+    try {
+      await api.sessions.update(session.id, { model: nextModel })
+      onSessionChangedRef.current?.()
+    } catch (e) {
+      setCurrentModel(prev)
+      setLoadError(`Couldn't switch model: ${(e as Error).message}`)
+    } finally {
+      setModelSwitching(false)
+    }
+  }
 
   const send = (text: string, attachments: Attachment[]) => {
     socketRef.current?.send({
@@ -136,7 +172,13 @@ export default function SessionView({
   }
 
   const stop = () => {
-    socketRef.current?.send({ type: 'interrupt' })
+    const sock = socketRef.current
+    if (!sock) {
+      console.warn('[forge] Stop: no socket')
+      return
+    }
+    console.info('[forge] Stop → sending interrupt')
+    sock.send({ type: 'interrupt' })
   }
 
   const answerQuestion = (answers: Record<string, string | string[]>) => {
@@ -227,9 +269,38 @@ export default function SessionView({
             background: COLORS.bgCard,
             borderRadius: 999,
             fontFamily: 'ui-monospace, monospace',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            opacity: modelSwitching ? 0.6 : 1,
           }}
+          title={modelSwitching ? 'Switching model…' : 'Change model for this session'}
         >
-          {session.agent_kind} · {session.model}
+          {session.agent_kind} ·
+          <select
+            value={currentModel}
+            onChange={(e) => void onModelChange(e.target.value)}
+            disabled={modelSwitching || !models}
+            style={{
+              background: 'transparent',
+              color: 'inherit',
+              border: 'none',
+              padding: 0,
+              font: 'inherit',
+              cursor: modelSwitching ? 'wait' : 'pointer',
+              outline: 'none',
+              appearance: 'none',
+              // leave room for the native-ish caret rendered below
+              paddingRight: 10,
+            }}
+          >
+            {(models?.[session.agent_kind] ?? [currentModel]).map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+          <span aria-hidden style={{ fontSize: 9, marginLeft: -6 }}>▾</span>
         </span>
         <span
           style={{
@@ -296,7 +367,7 @@ export default function SessionView({
           running={running}
           onSend={send}
           onStop={stop}
-          footerLeft={`${session.agent_kind} · ${session.model}`}
+          footerLeft={`${session.agent_kind} · ${currentModel}`}
           footerRight={
             wsConnected ? statusMeta.label : WS_STATUS_LABEL[wsStatus]
           }

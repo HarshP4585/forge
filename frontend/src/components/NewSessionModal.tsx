@@ -12,6 +12,7 @@ import { COLORS } from '../theme'
 const AGENT_OPTIONS: { kind: AgentKind; label: string }[] = [
   { kind: 'claude', label: 'Claude' },
   { kind: 'openai', label: 'OpenAI' },
+  { kind: 'gemini', label: 'Gemini' },
 ]
 
 type Mode = 'form' | 'browse'
@@ -157,7 +158,7 @@ export default function NewSessionModal({
               borderRadius: 6,
             }}
           >
-            No API keys saved yet. Go to Settings and add at least one key (Claude or OpenAI).
+            No API keys saved yet. Go to Settings and add at least one key (Claude, OpenAI, or Gemini).
           </p>
         )}
 
