@@ -71,11 +71,12 @@ async def _execute(
 
     ctx = build_context(folder, agent_kind, model)
     system = render(system_template, **ctx)
-    tool_schemas = (
-        tools_module.anthropic_schemas(scope="sub")
-        if agent_kind == "claude"
-        else tools_module.openai_schemas(scope="sub")
-    )
+    if agent_kind == "claude":
+        tool_schemas = tools_module.anthropic_schemas(scope="sub")
+    elif agent_kind == "gemini":
+        tool_schemas = tools_module.gemini_schemas(scope="sub")
+    else:
+        tool_schemas = tools_module.openai_schemas(scope="sub")
     history: List[Dict[str, Any]] = [
         {"role": "user", "content": [{"type": "text", "text": run.prompt}]}
     ]

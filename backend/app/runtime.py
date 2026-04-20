@@ -8,14 +8,18 @@ and await a Future that the WS handler resolves when the client POSTs an
 """
 
 import asyncio
+import logging
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from app.llm.agent import default_model, run_turn
+from app.llm.titler import generate_title
 from app.store import credentials as cred_store
 from app.store import messages as msg_store
 from app.store import sessions as sess_store
+
+log = logging.getLogger(__name__)
 
 
 class SessionRuntime:
@@ -85,15 +89,39 @@ class SessionRuntime:
             )
 
     async def interrupt(self) -> None:
-        if self._turn_task and not self._turn_task.done():
+        short = self.session_id[:8]
+        has_task = self._turn_task is not None and not self._turn_task.done()
+        pending_q_count = sum(
+            1 for f in self._pending_questions.values() if not f.done()
+        )
+        log.info(
+            "[runtime %s] interrupt requested — active_turn=%s pending_questions=%d",
+            short,
+            has_task,
+            pending_q_count,
+        )
+        if has_task:
             self._turn_task.cancel()
         # Reject any still-pending AskUserQuestion so tools unblock cleanly.
         for qid, fut in list(self._pending_questions.items()):
             if not fut.done():
                 fut.set_exception(asyncio.CancelledError())
             self._pending_questions.pop(qid, None)
+        if not has_task and pending_q_count == 0:
+            # No in-flight work — still emit a stopped status so the UI
+            # leaves the "Running" state. This can happen if the turn
+            # finished between the click and the event arriving.
+            sess_store.update_status(self.session_id, "stopped")
+            await self.emit({"type": "session.status", "status": "stopped"})
 
     async def _maybe_retitle(self, prompt: str) -> None:
+        """First-paint heuristic title: use the first line of the user's
+        prompt if the session is still carrying the default "New X
+        session" name. The LLM titler later refines it after the turn
+        completes — this exists so the sidebar shows something sensible
+        immediately instead of staying on ``New X session`` until the
+        assistant finishes streaming.
+        """
         sess = sess_store.get(self.session_id)
         if sess is None:
             return
@@ -105,6 +133,34 @@ class SessionRuntime:
             return
         sess_store.update_title(self.session_id, candidate)
         await self.emit({"type": "session.title", "title": candidate})
+
+    async def _refine_title_via_llm(self) -> None:
+        """Ask the session's provider for a polished summary title and
+        write it back. Runs as a background task after each successful
+        turn; swallows all failures. A no-op if the key is missing or
+        the titler returns nothing.
+        """
+        sess = sess_store.get(self.session_id)
+        if sess is None:
+            return
+        api_key = cred_store.get_key(sess.agent_kind)
+        if not api_key:
+            return
+        model = sess.model or default_model(sess.agent_kind)
+        try:
+            title = await generate_title(
+                agent_kind=sess.agent_kind,
+                model=model,
+                api_key=api_key,
+                history=self._history,
+            )
+        except BaseException:
+            # generate_title already swallows, but be defensive.
+            return
+        if not title or title == sess.title:
+            return
+        sess_store.update_title(self.session_id, title)
+        await self.emit({"type": "session.title", "title": title})
 
     async def _run_turn(
         self,
@@ -161,6 +217,10 @@ class SessionRuntime:
             sess_store.update_status(self.session_id, "idle")
             await self.emit({"type": "turn.done"})
             await self.emit({"type": "session.status", "status": "idle"})
+            # Refresh the title in the background. Fire-and-forget — the
+            # UI already has the turn's output; the title update is an
+            # ambient polish and must never block or fail a real turn.
+            asyncio.create_task(self._refine_title_via_llm())
         except asyncio.CancelledError:
             sess_store.update_status(self.session_id, "stopped")
             await self.emit({"type": "session.status", "status": "stopped"})

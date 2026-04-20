@@ -17,6 +17,10 @@ class SessionCreate(BaseModel):
     title: Optional[str] = None
 
 
+class SessionUpdate(BaseModel):
+    model: Optional[str] = Field(default=None, min_length=1)
+
+
 class Session(BaseModel):
     id: str
     agent_kind: AgentKind

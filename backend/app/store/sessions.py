@@ -108,6 +108,21 @@ def update_status(session_id: str, status: SessionStatus) -> None:
             raise
 
 
+def update_model(session_id: str, model: str) -> None:
+    now = _now_iso()
+    with get_conn() as conn:
+        try:
+            conn.execute("BEGIN")
+            conn.execute(
+                "UPDATE sessions SET model = ?, updated_at = ? WHERE id = ?",
+                (model, now, session_id),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+
 def update_title(session_id: str, title: str) -> None:
     now = _now_iso()
     with get_conn() as conn:

@@ -1,9 +1,10 @@
 # Forge — Project Context
 
 Self-hosted local web app that lets a single user drive multiple coding
-agents (Claude + OpenAI) from one browser UI. Each session is scoped to a
-folder on disk; the agent can read/write files, run bash, search, fetch
-URLs, spawn Explore subagents, and ask the user clarifying questions.
+agents (Claude + OpenAI + Gemini) from one browser UI. Each session is
+scoped to a folder on disk; the agent can read/write files, run bash,
+search, fetch URLs, spawn Explore subagents, and ask the user clarifying
+questions.
 
 Not a SaaS. Every user runs it on their own machine.
 
@@ -14,8 +15,8 @@ Not a SaaS. Every user runs it on their own machine.
 | Backend | Python 3.10+ + FastAPI + WebSockets |
 | Data | SQLite (single file, `~/.forge/app.db` when installed; `./data/app.db` in dev) via `sqlite3` stdlib. Scalar columns + JSON columns; schema evolves via `PRAGMA user_version` migrations |
 | Frontend | React 18 + Vite + TypeScript, dark theme. Built with `npm run build` → bundled into the Python wheel under `backend/app/static/`. |
-| LLM SDKs | `anthropic` + `openai` Python clients — talking to each vendor directly. No `claude-agent-sdk`, no `codex` CLI, no OpenRouter. |
-| Tool harness | 100% local Python implementations. One tool registry → schemas generated in both Anthropic and OpenAI formats. |
+| LLM SDKs | `anthropic` + `openai` + `google-genai` Python clients — talking to each vendor directly. No `claude-agent-sdk`, no `codex` CLI, no OpenRouter. |
+| Tool harness | 100% local Python implementations. One tool registry → schemas generated in Anthropic, OpenAI, and Gemini formats. |
 | Auth | User pastes API keys in Settings; stored in our SQLite `credentials` table |
 | Packaging | Single PyPI wheel (`forge-agent`). One uvicorn process serves both the SPA and the API on one port. `forge` CLI daemonizes by default (PID + log under `~/.forge/`), with `forge stop` / `forge status`. |
 | Release | Tag-triggered GitHub Actions workflow publishes to PyPI via Trusted Publishers (OIDC) — no stored secrets. |
@@ -119,7 +120,9 @@ don't serialize behind each other on the event loop.
   on vendor login servers.
 - **Multiple models per provider** — user picks the specific model when
   creating a session. Current picker: Claude (opus-4-7, sonnet-4-6,
-  haiku-4-5), OpenAI (gpt-5, gpt-4.1, gpt-5-mini).
+  haiku-4-5), OpenAI (gpt-5, gpt-4.1, gpt-5-mini), Gemini (3.1-pro-preview,
+  3-flash-preview, 3.1-flash-lite-preview, 2.5-pro, 2.5-flash,
+  2.5-flash-lite).
 
 ## Out of scope
 
@@ -176,3 +179,14 @@ Earlier turns covered initial scoping, storage choices, and the original
   allows publishing to TestPyPI for dry-runs.
 - **Distribution name**: `forge` was taken on PyPI → renamed to
   `forge-agent`. Import name stays `app`; CLI stays `forge`.
+- **Third provider — Google Gemini**: added alongside Claude and OpenAI
+  using the new unified `google-genai` SDK. The existing provider
+  abstraction (`kind`, `stream_turn`, `close`) absorbed it without any
+  structural change to the agent loop. New helpers:
+  `_translate_to_gemini()` in `providers.py` (Anthropic-shaped history →
+  Gemini `contents` with `model`/`user` roles and `function_call` /
+  `function_response` parts), and `_gemini_envelope()` +
+  `_sanitize_for_gemini()` in `tools/__init__.py` (drops JSON Schema
+  keys Gemini's validator rejects, like `additionalProperties`,
+  `$schema`, `default`). Ships both 3.x preview and 2.5 stable families;
+  default is `gemini-2.5-flash`.

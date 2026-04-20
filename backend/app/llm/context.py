@@ -10,6 +10,7 @@ from typing import Dict
 LLM_LABELS = {
     "claude": "Claude",
     "openai": "OpenAI",
+    "gemini": "Gemini",
 }
 
 

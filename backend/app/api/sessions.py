@@ -4,7 +4,8 @@ from typing import Any, Dict, List
 from fastapi import APIRouter, HTTPException, status
 
 from app import runtime
-from app.schemas.sessions import Session, SessionCreate
+from app.api.models import MODELS
+from app.schemas.sessions import Session, SessionCreate, SessionUpdate
 from app.store import credentials as cred_store
 from app.store import messages as msg_store
 from app.store import sessions as store
@@ -51,6 +52,24 @@ async def get_session(session_id: str) -> Session:
     if found is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Session not found")
     return found
+
+
+@router.patch("/{session_id}", response_model=Session)
+async def update_session(session_id: str, payload: SessionUpdate) -> Session:
+    sess = store.get(session_id)
+    if sess is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Session not found")
+    if payload.model is not None:
+        allowed = MODELS.get(sess.agent_kind, [])
+        if payload.model not in allowed:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"Model '{payload.model}' is not valid for provider '{sess.agent_kind}'.",
+            )
+        store.update_model(session_id, payload.model)
+    updated = store.get(session_id)
+    assert updated is not None
+    return updated
 
 
 @router.get("/{session_id}/messages")

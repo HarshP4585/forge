@@ -4,7 +4,7 @@ from typing import Optional
 from app.db import get_conn
 from app.schemas.credentials import AgentKind, CredentialStatus
 
-AGENT_KINDS: tuple[AgentKind, ...] = ("claude", "openai")
+AGENT_KINDS: tuple[AgentKind, ...] = ("claude", "openai", "gemini")
 
 
 def _now_iso() -> str:

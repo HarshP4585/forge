@@ -61,6 +61,7 @@ async def session_ws(ws: WebSocket, session_id: str) -> None:
                 if text or attachments:
                     await rt.submit_prompt(text, attachments)
             elif kind == "interrupt":
+                log.info("[ws %s] received interrupt", short_id)
                 await rt.interrupt()
             elif kind == "ask.answer":
                 qid = msg.get("id")

@@ -28,6 +28,7 @@ MAX_TOOL_ROUNDS = 20
 DEFAULT_MODELS = {
     "claude": "claude-sonnet-4-6",
     "openai": "gpt-4o",
+    "gemini": "gemini-2.5-flash",
 }
 
 
@@ -101,6 +102,8 @@ async def run_turn(
     # Tool schemas are generated per-vendor from the same registry.
     if agent_kind == "claude":
         tool_schemas = tools_module.anthropic_schemas(scope="main")
+    elif agent_kind == "gemini":
+        tool_schemas = tools_module.gemini_schemas(scope="main")
     else:
         tool_schemas = tools_module.openai_schemas(scope="main")
 
@@ -108,13 +111,27 @@ async def run_turn(
 
     try:
         for _ in range(MAX_TOOL_ROUNDS):
-            result = await provider.stream_turn(
-                system=system,
-                messages=history,
-                tools=tool_schemas,
-                model=model,
-                emit=emit,
-            )
+            # Before each provider call we've just appended a user-role
+            # block to history (either the initial prompt at the top of
+            # this function, or a tool_result block at the bottom of the
+            # previous iteration). If the provider raises — 429, network
+            # blip, cancellation, whatever — that user block is orphaned
+            # with no corresponding assistant response, so pop it back off
+            # so the next attempt doesn't accumulate ghost messages. Some
+            # providers (Gemini) reject consecutive same-role turns; all
+            # of them handle this ghost history awkwardly.
+            try:
+                result = await provider.stream_turn(
+                    system=system,
+                    messages=history,
+                    tools=tool_schemas,
+                    model=model,
+                    emit=emit,
+                )
+            except BaseException:
+                if history and history[-1].get("role") == "user":
+                    history.pop()
+                raise
 
             # Record the assistant message in history (full block list,
             # so Anthropic/OpenAI both see the right shape on next turn).
