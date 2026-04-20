@@ -41,3 +41,18 @@ export const FONTS = {
   body: '-apple-system, BlinkMacSystemFont, Inter, "Segoe UI", sans-serif',
   mono: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
 }
+
+// Per-provider accent color used for message-attribution borders, the
+// active-session indicator in the sidebar, and the status pill. Falls
+// back to ``blue`` for unknown kinds so new providers stay visible
+// without requiring a theme update.
+export const PROVIDER_ACCENT: Record<string, string> = {
+  claude: COLORS.purple,
+  openai: COLORS.green,
+  gemini: COLORS.blue,
+  ollama: COLORS.orange,
+}
+
+export function providerAccent(kind: string): string {
+  return PROVIDER_ACCENT[kind] ?? COLORS.blue
+}

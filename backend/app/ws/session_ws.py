@@ -63,6 +63,12 @@ async def session_ws(ws: WebSocket, session_id: str) -> None:
             elif kind == "interrupt":
                 log.info("[ws %s] received interrupt", short_id)
                 await rt.interrupt()
+            elif kind == "compact":
+                log.info("[ws %s] received compact", short_id)
+                # Run in a background task so the WS receive loop stays
+                # responsive — compaction can take several seconds and
+                # we still want interrupts / answers to land promptly.
+                asyncio.create_task(rt.compact())
             elif kind == "ask.answer":
                 qid = msg.get("id")
                 answers = msg.get("answers")

@@ -17,6 +17,7 @@ export type ClientEvent =
   | { type: 'prompt.submit'; text: string; attachments?: WireAttachment[] }
   | { type: 'tool.approve'; call_id: string; decision: 'allow' | 'deny' }
   | { type: 'interrupt' }
+  | { type: 'compact' }
   | { type: 'ask.answer'; id: string; answers: Record<string, string | string[]> }
 
 export type WsStatus =

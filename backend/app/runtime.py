@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from app.llm.agent import default_model, run_turn
+from app.llm.compactor import estimate_tokens, generate_summary
 from app.llm.titler import generate_title
 from app.store import credentials as cred_store
 from app.store import messages as msg_store
@@ -31,6 +32,46 @@ class SessionRuntime:
         self._history: List[Dict[str, Any]] = []
         self._is_first_turn = True
         self._pending_questions: Dict[str, asyncio.Future] = {}
+        # Set while a compact is in flight so we don't kick off a
+        # second one concurrently and so run_turn / submit_prompt can
+        # check before proceeding.
+        self._compacting: bool = False
+        # True once we've rehydrated from the DB (or confirmed there
+        # was nothing to rehydrate). Rehydration happens lazily on
+        # first ``get_or_create`` so cold sessions don't pay for it.
+        self._hydrated: bool = False
+
+    def _maybe_hydrate(self) -> None:
+        """Rebuild ``_history`` from persisted events. Runs once per
+        runtime; subsequent calls are no-ops. Tolerant to missing /
+        malformed events — partial history is better than none.
+        """
+        if self._hydrated:
+            return
+        self._hydrated = True
+        try:
+            events = msg_store.list_for_session(self.session_id)
+        except Exception as exc:
+            log.warning(
+                "[runtime %s] hydrate: failed to load events (%s: %s)",
+                self.session_id[:8],
+                type(exc).__name__,
+                exc,
+            )
+            return
+        if not events:
+            return
+        self._history = _rehydrate_history(events)
+        # After rehydration this is no longer the "first turn" — the
+        # Claude system-reminder block has already been sent on some
+        # prior turn (persisted into DB and thus recovered).
+        self._is_first_turn = False
+        log.info(
+            "[runtime %s] hydrated %d messages from %d events",
+            self.session_id[:8],
+            len(self._history),
+            len(events),
+        )
 
     def subscribe(self) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue()
@@ -84,9 +125,122 @@ class SessionRuntime:
                     "message": "Session is busy, wait for the current turn to finish.",
                 })
                 return
+            if self._compacting:
+                await self.emit({
+                    "type": "error",
+                    "message": "Session is compacting, try again in a moment.",
+                })
+                return
             self._turn_task = asyncio.create_task(
                 self._run_turn(prompt, attachments or [])
             )
+
+    async def compact(self) -> None:
+        """Summarize the in-memory history into a compressed form and
+        replace it, so subsequent turns run against a much smaller
+        context. Emits ``compact.start`` / ``compact.result`` so the
+        UI can toggle its "compacting" indicator; also emits a
+        follow-up ``usage`` event carrying the estimated new token
+        count so the context meter updates immediately (the exact
+        count lands on the next real turn).
+
+        Refuses to run concurrently with a turn or another compact.
+        The DB event log is never touched — users scrolling back still
+        see the full original transcript in the UI.
+        """
+        async with self._lock:
+            if self._turn_task and not self._turn_task.done():
+                await self.emit({
+                    "type": "error",
+                    "message": "Can't compact while a turn is running. Stop it first.",
+                })
+                return
+            if self._compacting:
+                await self.emit({
+                    "type": "system.notice",
+                    "level": "info",
+                    "text": "Compact already in progress.",
+                })
+                return
+            if not self._history:
+                await self.emit({
+                    "type": "system.notice",
+                    "level": "info",
+                    "text": "Nothing to compact yet — send a prompt first.",
+                })
+                return
+            sess = sess_store.get(self.session_id)
+            if sess is None:
+                return
+            api_key = cred_store.get_key(sess.agent_kind) or ""
+            if not api_key:
+                await self.emit({
+                    "type": "error",
+                    "message": f"No API key configured for {sess.agent_kind}.",
+                })
+                return
+            # Claim the slot under the lock so a concurrent compact /
+            # submit sees our flag and bails.
+            self._compacting = True
+            model_for_call = sess.model or default_model(sess.agent_kind)
+
+        # The summarizer call can take several seconds — run it
+        # outside the submit lock so status emits and front-end events
+        # don't stall.
+        try:
+            await self.emit({"type": "compact.start"})
+            summary = await generate_summary(
+                agent_kind=sess.agent_kind,
+                model=model_for_call,
+                api_key=api_key,
+                history=self._history,
+            )
+            if not summary:
+                await self.emit({
+                    "type": "error",
+                    "message": "Compact failed — summarizer returned nothing. History not changed.",
+                })
+                await self.emit({"type": "compact.result", "ok": False})
+                return
+
+            # Replace LLM-facing history with a synthetic summary pair.
+            self._history = [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Summarize our conversation so far.",
+                        }
+                    ],
+                },
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": summary}],
+                },
+            ]
+            estimated = estimate_tokens(summary)
+
+            await self.emit({
+                "type": "system.notice",
+                "level": "info",
+                "text": f"Conversation compacted (≈{estimated:,} tokens).",
+            })
+            await self.emit({
+                "type": "compact.result",
+                "ok": True,
+                "estimated_tokens": estimated,
+            })
+            # Drop the context meter to the new size immediately; the
+            # next real turn's usage event will replace this estimate
+            # with the exact count.
+            await self.emit({
+                "type": "usage",
+                "input_tokens": estimated,
+                "output_tokens": 0,
+            })
+        finally:
+            self._compacting = False
 
     async def interrupt(self) -> None:
         short = self.session_id[:8]
@@ -250,8 +404,96 @@ def get_or_create(session_id: str) -> SessionRuntime:
     rt = _sessions.get(session_id)
     if rt is None:
         rt = SessionRuntime(session_id)
+        # Rehydrate the LLM-facing history from the persisted event
+        # log. Synchronous (just walks a list of dicts) — fast enough
+        # to run inline even for long conversations.
+        rt._maybe_hydrate()
         _sessions[session_id] = rt
     return rt
+
+
+def _rehydrate_history(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Reconstruct the Anthropic-shaped ``_history`` list from the
+    persisted event stream.
+
+    Walks events in order and re-assembles:
+      message.user         → {role: 'user', content: [text]}
+      assistant.complete   → {role: 'assistant', content: [text]}
+      tool.call.start      → append {type: 'tool_use'} to current assistant
+      tool.call.result     → buffer until all this turn's tool uses are
+                             resolved, then flush as a user message of
+                             tool_result blocks
+
+    Image attachments are not recoverable (only metadata is persisted —
+    the raw base64 isn't) so any prior image content is silently lost.
+    That matches the documented limitation in CONTEXT.md.
+    """
+    history: List[Dict[str, Any]] = []
+    current_assistant: Optional[Dict[str, Any]] = None
+    tool_uses_pending: Dict[str, bool] = {}
+    tool_results_pending: List[Dict[str, Any]] = []
+
+    def flush_tool_results() -> None:
+        nonlocal tool_results_pending, current_assistant
+        if tool_results_pending:
+            history.append({"role": "user", "content": tool_results_pending})
+            tool_results_pending = []
+        current_assistant = None
+
+    for e in events:
+        t = e.get("type")
+        if t == "message.user":
+            # A new user prompt closes any pending tool-result group.
+            flush_tool_results()
+            text = str(e.get("text") or "")
+            content: List[Dict[str, Any]] = []
+            if text:
+                content.append({"type": "text", "text": text})
+            history.append({"role": "user", "content": content})
+        elif t == "assistant.complete":
+            text = str(e.get("text") or "")
+            current_assistant = {"role": "assistant", "content": []}
+            if text:
+                current_assistant["content"].append(
+                    {"type": "text", "text": text}
+                )
+            history.append(current_assistant)
+        elif t == "tool.call.start":
+            call_id = str(e.get("call_id") or "")
+            name = str(e.get("tool") or "")
+            inp = e.get("input") if isinstance(e.get("input"), dict) else {}
+            if current_assistant is not None and call_id and name:
+                current_assistant["content"].append({
+                    "type": "tool_use",
+                    "id": call_id,
+                    "name": name,
+                    "input": inp,
+                })
+                tool_uses_pending[call_id] = True
+        elif t == "tool.call.result":
+            call_id = str(e.get("call_id") or "")
+            output = e.get("output") or ""
+            is_error = bool(e.get("is_error"))
+            if call_id:
+                tool_results_pending.append({
+                    "type": "tool_result",
+                    "tool_use_id": call_id,
+                    "content": str(output),
+                    "is_error": is_error,
+                })
+                tool_uses_pending.pop(call_id, None)
+                # When every tool call for this assistant turn has
+                # resolved, flush them as the next user message and
+                # close out the current assistant.
+                if not tool_uses_pending:
+                    flush_tool_results()
+
+    # Anything still buffered at the end — e.g. a turn interrupted
+    # mid-flight — gets appended so history reflects reality.
+    if tool_results_pending:
+        history.append({"role": "user", "content": tool_results_pending})
+
+    return history
 
 
 def peek(session_id: str) -> Optional[SessionRuntime]:
