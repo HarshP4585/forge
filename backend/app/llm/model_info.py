@@ -98,6 +98,9 @@ async def get_model_info(
             async with _cache_lock:
                 _cache[key] = live
             return live
+            
+    if agent_kind == "ollama":
+        return await _fetch_ollama(model)
 
     return _STATIC.get(key)
 
@@ -130,3 +133,7 @@ async def _fetch_gemini(model: str, api_key: str) -> Optional[ModelInfo]:
             exc,
         )
         return None
+
+async def _fetch_ollama(model: str) -> Optional[ModelInfo]:
+    return ModelInfo(context_window=32000, max_output_tokens=8192, source="api")
+

@@ -6,6 +6,7 @@ const AGENTS: { kind: AgentKind; label: string; placeholder: string }[] = [
   { kind: 'claude', label: 'Claude', placeholder: 'sk-ant-...' },
   { kind: 'openai', label: 'OpenAI', placeholder: 'sk-...' },
   { kind: 'gemini', label: 'Gemini', placeholder: 'AIza...' },
+  { kind: 'ollama', label: 'Ollama API Key', placeholder: 'sk-...' },
 ]
 
 export default function CredentialsPage() {
