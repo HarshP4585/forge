@@ -135,5 +135,5 @@ async def _fetch_gemini(model: str, api_key: str) -> Optional[ModelInfo]:
         return None
 
 async def _fetch_ollama(model: str) -> Optional[ModelInfo]:
-    return ModelInfo(context_window=32000, max_output_tokens=8192, source="api")
+    return ModelInfo(context_window=256000, max_output_tokens=8192, source="api")
 
