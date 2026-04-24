@@ -13,6 +13,7 @@ dist/
 frontend/vite.config.js
 frontend/vite.config.d.ts
 frontend/*.tsbuildinfo
+package-lock.json
 
 # App data (SQLite DB, pasted API keys — never commit)
 data/

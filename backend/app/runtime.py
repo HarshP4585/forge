@@ -462,7 +462,18 @@ def _rehydrate_history(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             call_id = str(e.get("call_id") or "")
             name = str(e.get("tool") or "")
             inp = e.get("input") if isinstance(e.get("input"), dict) else {}
-            if current_assistant is not None and call_id and name:
+            if call_id and name:
+                # Providers only emit assistant.complete when there's text;
+                # a pure tool-call turn (common on OpenAI) skips it. If no
+                # assistant message is open for this round, synthesize an
+                # empty one so the tool_use lands somewhere — otherwise
+                # the follow-up tool_result becomes an orphan and OpenAI
+                # rejects the next turn with "messages with role 'tool'
+                # must be a response to a preceding message with
+                # 'tool_calls'".
+                if current_assistant is None:
+                    current_assistant = {"role": "assistant", "content": []}
+                    history.append(current_assistant)
                 current_assistant["content"].append({
                     "type": "tool_use",
                     "id": call_id,
