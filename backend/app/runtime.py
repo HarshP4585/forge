@@ -32,6 +32,20 @@ class SessionRuntime:
         self._history: List[Dict[str, Any]] = []
         self._is_first_turn = True
         self._pending_questions: Dict[str, asyncio.Future] = {}
+        # Per-tool approval state. ``_pending_approvals`` keys are tool
+        # call_ids (assigned by the provider, already unique per turn).
+        # ``_auto_approved_tools`` is populated when the user hits
+        # "Approve & remember for this session" on an approval card, so
+        # subsequent calls to the same tool skip the modal.
+        self._pending_approvals: Dict[str, asyncio.Future] = {}
+        self._auto_approved_tools: Set[str] = set()
+        # Plan mode: while True, the agent loop blocks mutating tools
+        # and surfaces a plan decision card to the UI. Entered by the
+        # model via the EnterPlanMode tool; exited by the user through
+        # ``resolve_plan``.
+        self._plan_mode: bool = False
+        self._current_plan: Optional[str] = None
+        self._pending_plan: Optional[asyncio.Future] = None
         # Set while a compact is in flight so we don't kick off a
         # second one concurrently and so run_turn / submit_prompt can
         # check before proceeding.
@@ -111,6 +125,92 @@ class SessionRuntime:
         if future is None or future.done():
             return False
         future.set_result(answers)
+        return True
+
+    async def approve(
+        self, call_id: str, tool: str, tool_input: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Pause until the user approves or denies a tool call. Called
+        by the agent loop before executing any tool whose policy is
+        ``ask`` (and not already remembered for this session).
+
+        Emits ``tool.approve.request`` and blocks on a Future resolved
+        by ``resolve_approval(call_id, ...)`` when the WS layer
+        forwards the user's click. Returns a dict with ``approved``
+        (bool) and optionally ``remember`` (``"session"``).
+
+        Session-scope remember is handled here: if the user ticks
+        "Approve & remember," we stash the tool name so the next call
+        to the same tool bypasses this method.
+        """
+        loop = asyncio.get_event_loop()
+        future: asyncio.Future = loop.create_future()
+        self._pending_approvals[call_id] = future
+        await self.emit({
+            "type": "tool.approve.request",
+            "call_id": call_id,
+            "tool": tool,
+            "input": tool_input,
+        })
+        try:
+            result = await future
+        finally:
+            self._pending_approvals.pop(call_id, None)
+        if result.get("approved") and result.get("remember") == "session":
+            self._auto_approved_tools.add(tool)
+        return result
+
+    def is_tool_auto_approved(self, tool: str) -> bool:
+        return tool in self._auto_approved_tools
+
+    def is_in_plan_mode(self) -> bool:
+        return self._plan_mode
+
+    async def enter_plan_mode(self, plan: str) -> None:
+        """Called by the EnterPlanMode tool's executor. Flips the
+        session into plan mode and emits a proposal event for the UI."""
+        self._plan_mode = True
+        self._current_plan = plan
+        await self.emit({
+            "type": "plan.proposal",
+            "plan": plan,
+        })
+
+    def resolve_plan(
+        self, approved: bool, feedback: Optional[str] = None
+    ) -> bool:
+        """WS entry point. Accept: clears plan mode, emits
+        ``plan.accepted``, next turn executes normally. Reject: clears
+        plan mode, emits ``plan.rejected`` with feedback. The UI then
+        typically sends the feedback as the next user prompt so the
+        model can revise."""
+        if not self._plan_mode:
+            return False
+        self._plan_mode = False
+        plan = self._current_plan
+        self._current_plan = None
+        if approved:
+            # Fire-and-forget emit; we don't hold the WS loop.
+            asyncio.create_task(
+                self.emit({"type": "plan.accepted", "plan": plan})
+            )
+        else:
+            asyncio.create_task(
+                self.emit({
+                    "type": "plan.rejected",
+                    "plan": plan,
+                    "feedback": feedback or "",
+                })
+            )
+        return True
+
+    def resolve_approval(
+        self, call_id: str, approved: bool, remember: Optional[str] = None
+    ) -> bool:
+        future = self._pending_approvals.get(call_id)
+        if future is None or future.done():
+            return False
+        future.set_result({"approved": bool(approved), "remember": remember})
         return True
 
     async def submit_prompt(
@@ -366,6 +466,10 @@ class SessionRuntime:
                 emit=self.emit,
                 is_first_turn=self._is_first_turn,
                 ask_user=self.ask_user,
+                approve_tool=self.approve,
+                is_tool_auto_approved=self.is_tool_auto_approved,
+                enter_plan_mode=self.enter_plan_mode,
+                is_in_plan_mode=self.is_in_plan_mode,
             )
             self._is_first_turn = False
             sess_store.update_status(self.session_id, "idle")

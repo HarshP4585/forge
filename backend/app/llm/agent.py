@@ -11,7 +11,7 @@ provider translates at send time.
 
 import os
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from app import tools as tools_module
 from app.llm.context import build as build_context
@@ -22,6 +22,7 @@ from app.llm.prompts import (
 )
 from app.llm.providers import build_provider
 from app.tools import set_session_context
+from app.tools.policy import is_blocked, needs_approval
 
 EmitFn = Callable[[Dict[str, Any]], Awaitable[None]]
 
@@ -38,6 +39,19 @@ def _max_rounds() -> int:
 
 
 MAX_TOOL_ROUNDS = _max_rounds()
+
+# Tools blocked while a session is in plan mode. The model can still
+# explore (Read/Grep/Glob/WebSearch) but can't modify state or reach
+# out to the network until the user accepts / rejects the plan.
+_PLAN_MODE_BLOCKED_TOOLS = frozenset({
+    "Bash",
+    "Write",
+    "Edit",
+    "MultiEdit",
+    "NotebookEdit",
+    "WebFetch",
+})
+
 DEFAULT_MODELS = {
     "claude": "claude-sonnet-4-6",
     "openai": "gpt-4o",
@@ -61,6 +75,10 @@ async def run_turn(
     is_first_turn: bool,
     attachments: List[Dict[str, Any]] = None,  # type: ignore[assignment]
     ask_user: Any = None,
+    approve_tool: Any = None,
+    is_tool_auto_approved: Any = None,
+    enter_plan_mode: Any = None,
+    is_in_plan_mode: Any = None,
 ) -> None:
     """Execute one user → agent turn. Mutates ``history`` in place."""
     set_session_context({
@@ -69,6 +87,7 @@ async def run_turn(
         "api_key": api_key,
         "emit": emit,
         "ask_user": ask_user,
+        "enter_plan_mode": enter_plan_mode,
     })
 
     ctx = build_context(folder, agent_kind, model)
@@ -163,7 +182,13 @@ async def run_turn(
             if not result["tool_uses"]:
                 return  # turn complete
 
-            # Execute tools and feed back as tool_result blocks.
+            # Execute tools and feed back as tool_result blocks. Before
+            # each call, consult the tool policy: "allow" runs free, "ask"
+            # pauses for user approval via the runtime, "deny" is a
+            # hard-coded no-op (reserved for future policy-file blocks).
+            # A denied tool gets a synthetic error tool_result so the
+            # model sees the refusal and can course-correct rather than
+            # the turn crashing.
             tool_result_blocks: List[Dict[str, Any]] = []
             for tu in result["tool_uses"]:
                 await emit({
@@ -172,14 +197,56 @@ async def run_turn(
                     "tool": tu["name"],
                     "input": tu["input"],
                 })
-                try:
-                    output = await tools_module.execute(
-                        tu["name"], tu["input"], folder
+
+                approved = True
+                denied_reason: Optional[str] = None
+                if is_blocked(tu["name"]):
+                    approved = False
+                    denied_reason = (
+                        f"Tool '{tu['name']}' is blocked by policy."
                     )
-                    is_error = False
-                except Exception as exc:
-                    output = f"Tool execution error: {exc}"
+                elif (
+                    is_in_plan_mode is not None
+                    and is_in_plan_mode()
+                    and tu["name"] in _PLAN_MODE_BLOCKED_TOOLS
+                ):
+                    approved = False
+                    denied_reason = (
+                        f"Session is in PLAN MODE; '{tu['name']}' is disabled "
+                        "until the user accepts or rejects the plan. Use "
+                        "read-only tools (Read, Grep, Glob, WebSearch) to "
+                        "refine the plan, or wait for the user's decision."
+                    )
+                elif needs_approval(tu["name"]):
+                    already_remembered = bool(
+                        is_tool_auto_approved
+                        and is_tool_auto_approved(tu["name"])
+                    )
+                    if not already_remembered and approve_tool is not None:
+                        decision = await approve_tool(
+                            tu["id"], tu["name"], tu["input"]
+                        )
+                        approved = bool(decision.get("approved"))
+                        if not approved:
+                            denied_reason = (
+                                "User denied this tool call. Do not retry "
+                                "the same call; ask the user what they "
+                                "want, or try a different approach."
+                            )
+
+                if approved:
+                    try:
+                        output = await tools_module.execute(
+                            tu["name"], tu["input"], folder
+                        )
+                        is_error = False
+                    except Exception as exc:
+                        output = f"Tool execution error: {exc}"
+                        is_error = True
+                else:
+                    output = denied_reason or "Tool call not approved."
                     is_error = True
+
                 await emit({
                     "type": "tool.call.result",
                     "call_id": tu["id"],

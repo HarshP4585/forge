@@ -1,4 +1,10 @@
-import { memo, type CSSProperties, type ReactNode } from 'react'
+import {
+  memo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkBreaks from 'remark-breaks'
 import remarkGfm from 'remark-gfm'
@@ -30,7 +36,13 @@ function MarkdownImpl({
     <div className={className} style={{ ...wrapperStyle, ...style }}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkBreaks]}
-        rehypePlugins={[rehypeHighlight]}
+        // ``detect: true`` lets highlight.js autodetect language for
+        // fences the model forgot to tag (```...``` with no language).
+        // ``ignoreMissing`` keeps the tree rendering if a tagged
+        // language isn't bundled — better than blowing up.
+        rehypePlugins={[
+          [rehypeHighlight, { detect: true, ignoreMissing: true }],
+        ]}
         components={components}
       >
         {children}
@@ -243,7 +255,9 @@ const components: Components = {
   // below in the ``code`` override.
   pre: (props) => {
     const { children, ...rest } = props as NodeProps
-    return <pre style={preStyle} {...passthrough(rest)}>{children}</pre>
+    return (
+      <CodeBlockWithCopy {...passthrough(rest)}>{children}</CodeBlockWithCopy>
+    )
   },
   code: (props) => {
     const { children, className, ...rest } = props as NodeProps
@@ -272,4 +286,78 @@ const components: Components = {
 function passthrough(props: NodeProps): Record<string, unknown> {
   const { node: _node, ...rest } = props
   return rest
+}
+
+/**
+ * Wraps a fenced code block with a small "Copy" button in the top-right
+ * corner. Reads the rendered code via a ref at click time so we always
+ * copy the exact text the user sees (post-highlighting), not a stale
+ * snapshot of the children prop.
+ */
+function CodeBlockWithCopy({
+  children,
+  ...rest
+}: {
+  children?: ReactNode
+} & Record<string, unknown>) {
+  const preRef = useRef<HTMLPreElement>(null)
+  const [copied, setCopied] = useState(false)
+  const onCopy = () => {
+    const text = preRef.current?.innerText ?? ''
+    if (!text) return
+    const finish = () => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1400)
+    }
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(finish, finish)
+    } else {
+      // Fallback for non-HTTPS / older browsers: select + execCommand.
+      const sel = window.getSelection()
+      const range = document.createRange()
+      if (preRef.current) {
+        range.selectNodeContents(preRef.current)
+        sel?.removeAllRanges()
+        sel?.addRange(range)
+        try {
+          document.execCommand('copy')
+        } catch {
+          /* ignore */
+        }
+        sel?.removeAllRanges()
+        finish()
+      }
+    }
+  }
+  return (
+    <div style={{ position: 'relative' }}>
+      <pre ref={preRef} style={preStyle} {...rest}>
+        {children}
+      </pre>
+      <button
+        type="button"
+        onClick={onCopy}
+        aria-label={copied ? 'Copied' : 'Copy code'}
+        style={{
+          position: 'absolute',
+          top: 8,
+          right: 8,
+          padding: '3px 10px',
+          fontSize: 10.5,
+          fontWeight: 600,
+          letterSpacing: 0.3,
+          textTransform: 'uppercase',
+          color: copied ? COLORS.green : COLORS.textDim,
+          background: copied ? `${COLORS.green}1a` : COLORS.bgCard,
+          border: `1px solid ${copied ? `${COLORS.green}55` : COLORS.border}`,
+          borderRadius: 999,
+          cursor: 'pointer',
+          opacity: 0.85,
+          transition: 'color 120ms, background 120ms, border-color 120ms',
+        }}
+      >
+        {copied ? 'Copied' : 'Copy'}
+      </button>
+    </div>
+  )
 }

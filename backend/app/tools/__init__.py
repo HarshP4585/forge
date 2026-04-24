@@ -152,9 +152,11 @@ from app.tools import glob as _glob  # noqa: E402,F401
 from app.tools import grep  # noqa: E402,F401
 from app.tools import read  # noqa: E402,F401
 from app.tools import edit  # noqa: E402,F401
+from app.tools import multi_edit  # noqa: E402,F401
 from app.tools import write  # noqa: E402,F401
 from app.tools import notebook_edit  # noqa: E402,F401
 from app.tools import web  # noqa: E402,F401
 from app.tools import todo  # noqa: E402,F401
 from app.tools import subagent  # noqa: E402,F401
 from app.tools import ask_user  # noqa: E402,F401
+from app.tools import plan_mode  # noqa: E402,F401
