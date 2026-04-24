@@ -15,10 +15,16 @@ export interface WireAttachment {
 
 export type ClientEvent =
   | { type: 'prompt.submit'; text: string; attachments?: WireAttachment[] }
-  | { type: 'tool.approve'; call_id: string; decision: 'allow' | 'deny' }
+  | {
+      type: 'tool.approve.response'
+      call_id: string
+      approved: boolean
+      remember?: 'session'
+    }
   | { type: 'interrupt' }
   | { type: 'compact' }
   | { type: 'ask.answer'; id: string; answers: Record<string, string | string[]> }
+  | { type: 'plan.decision'; approved: boolean; feedback?: string }
 
 export type WsStatus =
   | 'connecting'

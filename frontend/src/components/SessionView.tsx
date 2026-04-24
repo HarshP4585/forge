@@ -266,6 +266,37 @@ export default function SessionView({
     socketRef.current?.send({ type: 'compact' })
   }
 
+  const sendToolApproval = (
+    callId: string,
+    approved: boolean,
+    remember: boolean,
+  ) => {
+    socketRef.current?.send({
+      type: 'tool.approve.response',
+      call_id: callId,
+      approved,
+      remember: remember ? 'session' : undefined,
+    })
+  }
+
+  const sendPlanDecision = (approved: boolean, feedback?: string) => {
+    socketRef.current?.send({
+      type: 'plan.decision',
+      approved,
+      feedback,
+    })
+    // If the user rejected with feedback, forward the feedback as the
+    // next user prompt so the model sees it and can revise. If no
+    // feedback was given, a bare rejection is enough for the backend
+    // to exit plan mode; the user will follow up manually.
+    if (!approved && feedback && feedback.trim()) {
+      socketRef.current?.send({
+        type: 'prompt.submit',
+        text: feedback.trim(),
+      })
+    }
+  }
+
   const answerQuestion = (answers: Record<string, string | string[]>) => {
     if (!pendingQuestion) return
     socketRef.current?.send({
@@ -588,6 +619,8 @@ export default function SessionView({
                 }
               : null
           }
+          onToolApproval={sendToolApproval}
+          onPlanDecision={sendPlanDecision}
         />
       </div>
 

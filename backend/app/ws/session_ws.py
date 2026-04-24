@@ -74,6 +74,23 @@ async def session_ws(ws: WebSocket, session_id: str) -> None:
                 answers = msg.get("answers")
                 if isinstance(qid, str):
                     rt.resolve_question(qid, answers)
+            elif kind == "tool.approve.response":
+                call_id = msg.get("call_id")
+                approved = bool(msg.get("approved"))
+                remember = msg.get("remember")
+                if isinstance(call_id, str):
+                    rt.resolve_approval(
+                        call_id,
+                        approved,
+                        remember if isinstance(remember, str) else None,
+                    )
+            elif kind == "plan.decision":
+                approved = bool(msg.get("approved"))
+                feedback = msg.get("feedback")
+                rt.resolve_plan(
+                    approved,
+                    feedback if isinstance(feedback, str) else None,
+                )
             else:
                 log.debug("[ws %s] unknown client event kind=%r", short_id, kind)
         close_reason = "loop exit"
