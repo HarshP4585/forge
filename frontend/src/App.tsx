@@ -120,7 +120,7 @@ export default function App() {
             <section style={{ padding: '0 40px 32px 40px', maxWidth: 720, width: '100%' }}>
               <div style={{ border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: 16, margin: '12px 0', background: COLORS.bgCard }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                  <strong style={{ fontSize: 15 }}>Ollama server</strong>
+                  <strong style={{ fontSize: 15 }}>Ollama (Local Model)</strong>
                   {ollamaStatus?.type === 'success' && <span style={{ fontSize: 12, color: COLORS.green }}>{ollamaStatus.message}</span>}
                 </div>
                 <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
