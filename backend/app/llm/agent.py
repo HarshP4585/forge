@@ -9,6 +9,7 @@ conversation. It uses our internal Anthropic-shaped format; the OpenAI
 provider translates at send time.
 """
 
+import os
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List
 
@@ -24,7 +25,19 @@ from app.tools import set_session_context
 
 EmitFn = Callable[[Dict[str, Any]], Awaitable[None]]
 
-MAX_TOOL_ROUNDS = 20
+# Per-turn cap on how many tool-use rounds the agent can chain before we
+# force-stop. Catches runaway loops without limiting real exploration.
+# Override via ``FORGE_MAX_TOOL_ROUNDS`` for tasks like whole-repo audits
+# that legitimately need dozens of Read/Grep calls.
+def _max_rounds() -> int:
+    raw = os.environ.get("FORGE_MAX_TOOL_ROUNDS", "50")
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 50
+
+
+MAX_TOOL_ROUNDS = _max_rounds()
 DEFAULT_MODELS = {
     "claude": "claude-sonnet-4-6",
     "openai": "gpt-4o",
